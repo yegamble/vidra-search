@@ -62,6 +62,10 @@ SELECT DISTINCT ON (lower(d.title)) d.title,
 FROM search.documents d
 WHERE d.eligible
   AND (NOT @hide_sensitive::bool OR NOT d.is_sensitive)
+  -- `%` recalls trigram candidates via the lower(title) GIN index (threshold
+  -- pg_trgm.similarity_threshold=0.3); the explicit >= 0.35 then refines to the
+  -- algorithms-report cutoff on that small candidate set (was a full seq scan).
+  AND lower(d.title) % @q::text
   AND similarity(lower(d.title), @q::text) >= 0.35
 ORDER BY lower(d.title), sim DESC
 LIMIT @lim::int;

@@ -19,9 +19,9 @@ recall AS (
       AND (NOT @hide_sensitive::bool OR NOT d.is_sensitive)
       AND (
             d.tsv @@ q.tsq
-         OR similarity(lower(d.title), @query::text) >= 0.3
-         OR @query::text = ANY(SELECT lower(x) FROM unnest(d.tags) AS x)
-         OR lower(coalesce(d.channel_name, '')) = @query::text
+         OR lower(d.title) % @query::text
+         OR d.tags @> ARRAY[@query::text]
+         OR lower(d.channel_name) = @query::text
           )
     UNION
     SELECT qve.video_id

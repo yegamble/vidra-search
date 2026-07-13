@@ -31,9 +31,9 @@ WHERE d.eligible
   AND (NOT $2::bool OR NOT d.is_sensitive)
   AND (
         d.tsv @@ q.tsq
-     OR similarity(lower(d.title), $1::text) >= 0.3
-     OR $1::text = ANY(SELECT lower(x) FROM unnest(d.tags) AS x)
-     OR lower(coalesce(d.channel_name, '')) = $1::text
+     OR lower(d.title) % $1::text
+     OR d.tags @> ARRAY[$1::text]
+     OR lower(d.channel_name) = $1::text
       )
   AND ($3::text IS NULL OR $3 = ANY(d.tags))
   AND ($4::text IS NULL OR d.category = $4)
