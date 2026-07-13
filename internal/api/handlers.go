@@ -103,6 +103,61 @@ func (s *Server) handleEvents(c echo.Context) error {
 	return c.JSON(http.StatusOK, res)
 }
 
+// handleGetSearchHistory serves GET /internal/v1/users/{user_id}/search-history.
+func (s *Server) handleGetSearchHistory(c echo.Context) error {
+	userID, err := uuid.Parse(c.Param("user_id"))
+	if err != nil {
+		return newValidation("user_id", "must be a valid UUID")
+	}
+	resp, err := s.svcs.History.List(c.Request().Context(), userID, qInt(c, "limit"), qInt(c, "offset"))
+	if err != nil {
+		return err
+	}
+	return c.JSON(http.StatusOK, resp)
+}
+
+// handleClearSearchHistory serves DELETE /internal/v1/users/{user_id}/search-history:
+// clears the user's history and anonymizes their raw logs.
+func (s *Server) handleClearSearchHistory(c echo.Context) error {
+	userID, err := uuid.Parse(c.Param("user_id"))
+	if err != nil {
+		return newValidation("user_id", "must be a valid UUID")
+	}
+	if err := s.svcs.History.ClearAll(c.Request().Context(), userID); err != nil {
+		return err
+	}
+	return c.NoContent(http.StatusNoContent)
+}
+
+// handleDeleteSearchHistoryEntry serves
+// DELETE /internal/v1/users/{user_id}/search-history/{normalized_query}. Echo has
+// already URL-decoded the path param, so it is used directly as the normalized
+// query key.
+func (s *Server) handleDeleteSearchHistoryEntry(c echo.Context) error {
+	userID, err := uuid.Parse(c.Param("user_id"))
+	if err != nil {
+		return newValidation("user_id", "must be a valid UUID")
+	}
+	normalizedQuery := c.Param("normalized_query")
+	if err := s.svcs.History.DeleteEntry(c.Request().Context(), userID, normalizedQuery); err != nil {
+		return err
+	}
+	return c.NoContent(http.StatusNoContent)
+}
+
+// handleDeleteUser serves DELETE /internal/v1/users/{user_id}: a full privacy
+// purge (history, projections, anonymized logs).
+func (s *Server) handleDeleteUser(c echo.Context) error {
+	userID, err := uuid.Parse(c.Param("user_id"))
+	if err != nil {
+		return newValidation("user_id", "must be a valid UUID")
+	}
+	if err := s.svcs.History.PurgeUser(c.Request().Context(), userID); err != nil {
+		return err
+	}
+	return c.NoContent(http.StatusNoContent)
+}
+
 // --- query param helpers ---
 
 // qInt returns the integer query value, or 0 when absent/invalid (the service

@@ -11,6 +11,20 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type SearchBehaviorEvent struct {
+	ID              int64       `json:"id"`
+	EventID         uuid.UUID   `json:"event_id"`
+	Type            string      `json:"type"`
+	UserID          pgtype.UUID `json:"user_id"`
+	SessionID       *string     `json:"session_id"`
+	NormalizedQuery *string     `json:"normalized_query"`
+	VideoID         pgtype.UUID `json:"video_id"`
+	Position        *int32      `json:"position"`
+	ModelVersion    *string     `json:"model_version"`
+	OccurredAt      time.Time   `json:"occurred_at"`
+	Props           []byte      `json:"props"`
+}
+
 type SearchDocument struct {
 	VideoID          uuid.UUID          `json:"video_id"`
 	Kind             string             `json:"kind"`
@@ -42,8 +56,62 @@ type SearchEventsInbox struct {
 	ReceivedAt time.Time `json:"received_at"`
 }
 
+type SearchQueryAggregate struct {
+	NormalizedQuery string    `json:"normalized_query"`
+	DisplayQuery    string    `json:"display_query"`
+	TotalCount      int64     `json:"total_count"`
+	DistinctUsers   int32     `json:"distinct_users"`
+	DecayedFreq     float64   `json:"decayed_freq"`
+	FirstSeen       time.Time `json:"first_seen"`
+	LastSeen        time.Time `json:"last_seen"`
+	Suggestible     bool      `json:"suggestible"`
+	Banned          bool      `json:"banned"`
+}
+
+type SearchQueryLog struct {
+	ID              int64       `json:"id"`
+	EventID         pgtype.UUID `json:"event_id"`
+	NormalizedQuery string      `json:"normalized_query"`
+	DisplayQuery    string      `json:"display_query"`
+	UserID          pgtype.UUID `json:"user_id"`
+	SessionID       *string     `json:"session_id"`
+	ResultsCount    *int32      `json:"results_count"`
+	SubmittedAt     time.Time   `json:"submitted_at"`
+}
+
+type SearchQueryVideoEngagement struct {
+	NormalizedQuery   string    `json:"normalized_query"`
+	VideoID           uuid.UUID `json:"video_id"`
+	Impressions       int64     `json:"impressions"`
+	Clicks            int64     `json:"clicks"`
+	MeaningfulWatches int64     `json:"meaningful_watches"`
+	UpdatedAt         time.Time `json:"updated_at"`
+}
+
 type SearchServiceConfig struct {
 	Key       string    `json:"key"`
 	Value     string    `json:"value"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type SearchUserSearchHistory struct {
+	UserID          uuid.UUID `json:"user_id"`
+	NormalizedQuery string    `json:"normalized_query"`
+	DisplayQuery    string    `json:"display_query"`
+	UseCount        int32     `json:"use_count"`
+	LastUsedAt      time.Time `json:"last_used_at"`
+	Hidden          bool      `json:"hidden"`
+}
+
+type SearchUserWatchProjection struct {
+	UserID        uuid.UUID `json:"user_id"`
+	VideoID       uuid.UUID `json:"video_id"`
+	Weight        float32   `json:"weight"`
+	LastWatchedAt time.Time `json:"last_watched_at"`
+}
+
+type SearchWorkerCursor struct {
+	CursorName string    `json:"cursor_name"`
+	CursorPos  int64     `json:"cursor_pos"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }

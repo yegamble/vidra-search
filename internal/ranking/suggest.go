@@ -14,16 +14,18 @@ import (
 // values, mapping to pop, prefix-quality, personal, doc-popularity, and a
 // length penalty). Tunable in one place.
 type Weights struct {
-	Pop  float64 // global query popularity (decayed_freq) — aggregate stream
-	Pfx  float64 // prefix quality (exact vs fuzzy)
-	Pers float64 // personal-history boost
-	Doc  float64 // document popularity (views/count) — doc-derived stream
-	Len  float64 // length penalty
+	Pop   float64 // global query popularity (decayed_freq) — aggregate stream
+	Pfx   float64 // prefix quality (exact vs fuzzy)
+	Pers  float64 // personal-history boost
+	Doc   float64 // document popularity (views/count) — doc-derived stream
+	Trend float64 // small boost for candidates currently trending
+	Len   float64 // length penalty
 }
 
-// DefaultWeights is the W1 blend. The Pop/Pers terms are inert in simple mode
-// (no aggregate/history streams yet) and become live in W2.
-var DefaultWeights = Weights{Pop: 1.0, Pfx: 0.6, Pers: 0.8, Doc: 0.4, Len: 0.1}
+// DefaultWeights is the suggestion blend (algorithms report start values, plus a
+// small trending nudge). All streams are live in W2: aggregate (Pop), personal
+// history/session (Pers), doc-derived (Doc), and the trending boost.
+var DefaultWeights = Weights{Pop: 1.0, Pfx: 0.6, Pers: 0.8, Doc: 0.4, Trend: 0.15, Len: 0.1}
 
 // Source identifies which candidate stream a suggestion came from, so its
 // popularity is normalized against the right peer group.
@@ -57,6 +59,9 @@ type Candidate struct {
 	// ExactPrefix is true when the candidate matched the query as an anchored
 	// prefix; false for a trigram (typo) fuzzy match.
 	ExactPrefix bool
+	// Trending is true when this candidate is in the current trending set (a
+	// small blend boost).
+	Trending bool
 	// Popularity is the raw stream-specific signal: decayed_freq for query
 	// candidates, view/use counts for doc/history candidates.
 	Popularity float64
@@ -168,7 +173,11 @@ func blendScore(c Candidate, maxPop map[Source]float64, w Weights) float64 {
 	if lenPenalty > 1 {
 		lenPenalty = 1
 	}
-	return w.Pop*pop + w.Pfx*prefixQuality + w.Pers*personal + w.Doc*doc - w.Len*lenPenalty
+	trend := 0.0
+	if c.Trending {
+		trend = 1.0
+	}
+	return w.Pop*pop + w.Pfx*prefixQuality + w.Pers*personal + w.Doc*doc + w.Trend*trend - w.Len*lenPenalty
 }
 
 // better is the total order used both for dedupe and final ranking. Exact-prefix

@@ -31,6 +31,28 @@ GROUP BY t
 ORDER BY cnt DESC
 LIMIT @lim::int;
 
+-- name: SuggestAggregatePrefix :many
+-- The global-popularity suggestion stream (§1.6a): suggestible, non-banned
+-- aggregate queries whose normalized form starts with the prefix, ordered by
+-- decayed frequency. Uses the query_aggregates text_pattern_ops prefix index.
+-- @prefix must be the normalized prefix with a trailing '%'.
+SELECT normalized_query, display_query, decayed_freq
+FROM search.query_aggregates
+WHERE suggestible AND NOT banned
+  AND normalized_query LIKE @prefix::text
+ORDER BY decayed_freq DESC
+LIMIT @lim::int;
+
+-- name: SuggestUserHistoryPrefix :many
+-- The personal suggestion stream (§1.6c): the signed-in user's own non-hidden
+-- recent queries matching the prefix, most-recent first.
+SELECT normalized_query, display_query, last_used_at, use_count
+FROM search.user_search_history
+WHERE user_id = @user_id AND NOT hidden
+  AND normalized_query LIKE @prefix::text
+ORDER BY last_used_at DESC
+LIMIT @lim::int;
+
 -- name: SuggestTitleFuzzy :many
 -- Typo fallback: trigram-similar titles, used only when exact-prefix results are
 -- short of the requested limit. Threshold 0.35 (algorithms report).

@@ -166,7 +166,7 @@ func (q *Queries) SuppressDocument(ctx context.Context, arg SuppressDocumentPara
 const suppressOwnerDocuments = `-- name: SuppressOwnerDocuments :exec
 UPDATE search.documents
 SET eligible = false, suppressed_reason = $1, indexed_at = now()
-WHERE owner_id = $2
+WHERE owner_id = $2 AND eligible
 `
 
 type SuppressOwnerDocumentsParams struct {
@@ -174,7 +174,11 @@ type SuppressOwnerDocumentsParams struct {
 	OwnerID pgtype.UUID `json:"owner_id"`
 }
 
-// user.suppress with unlisted=true: hide everything the owner has.
+// user.suppress with unlisted=true: hide the owner's currently-VISIBLE documents.
+// The `AND eligible` guard is essential: without it this would stamp
+// suppressed_reason='owner_unlisted' onto docs already hidden for another reason
+// (deleted/blocked/private), and RestoreOwnerDocuments would then wrongly
+// re-enable them on relist. Only docs this stamp actually hid are later restored.
 func (q *Queries) SuppressOwnerDocuments(ctx context.Context, arg SuppressOwnerDocumentsParams) error {
 	_, err := q.db.Exec(ctx, suppressOwnerDocuments, arg.Reason, arg.OwnerID)
 	return err

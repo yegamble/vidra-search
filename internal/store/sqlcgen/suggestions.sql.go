@@ -7,7 +7,54 @@ package sqlcgen
 
 import (
 	"context"
+	"time"
+
+	"github.com/google/uuid"
 )
+
+const suggestAggregatePrefix = `-- name: SuggestAggregatePrefix :many
+SELECT normalized_query, display_query, decayed_freq
+FROM search.query_aggregates
+WHERE suggestible AND NOT banned
+  AND normalized_query LIKE $1::text
+ORDER BY decayed_freq DESC
+LIMIT $2::int
+`
+
+type SuggestAggregatePrefixParams struct {
+	Prefix string `json:"prefix"`
+	Lim    int32  `json:"lim"`
+}
+
+type SuggestAggregatePrefixRow struct {
+	NormalizedQuery string  `json:"normalized_query"`
+	DisplayQuery    string  `json:"display_query"`
+	DecayedFreq     float64 `json:"decayed_freq"`
+}
+
+// The global-popularity suggestion stream (§1.6a): suggestible, non-banned
+// aggregate queries whose normalized form starts with the prefix, ordered by
+// decayed frequency. Uses the query_aggregates text_pattern_ops prefix index.
+// @prefix must be the normalized prefix with a trailing '%'.
+func (q *Queries) SuggestAggregatePrefix(ctx context.Context, arg SuggestAggregatePrefixParams) ([]SuggestAggregatePrefixRow, error) {
+	rows, err := q.db.Query(ctx, suggestAggregatePrefix, arg.Prefix, arg.Lim)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SuggestAggregatePrefixRow
+	for rows.Next() {
+		var i SuggestAggregatePrefixRow
+		if err := rows.Scan(&i.NormalizedQuery, &i.DisplayQuery, &i.DecayedFreq); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
 
 const suggestChannelPrefix = `-- name: SuggestChannelPrefix :many
 SELECT d.channel_name, min(d.channel_handle)::text AS channel_handle, max(d.views)::bigint AS views
@@ -175,6 +222,55 @@ func (q *Queries) SuggestTitlePrefix(ctx context.Context, arg SuggestTitlePrefix
 	for rows.Next() {
 		var i SuggestTitlePrefixRow
 		if err := rows.Scan(&i.Title, &i.Views); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const suggestUserHistoryPrefix = `-- name: SuggestUserHistoryPrefix :many
+SELECT normalized_query, display_query, last_used_at, use_count
+FROM search.user_search_history
+WHERE user_id = $1 AND NOT hidden
+  AND normalized_query LIKE $2::text
+ORDER BY last_used_at DESC
+LIMIT $3::int
+`
+
+type SuggestUserHistoryPrefixParams struct {
+	UserID uuid.UUID `json:"user_id"`
+	Prefix string    `json:"prefix"`
+	Lim    int32     `json:"lim"`
+}
+
+type SuggestUserHistoryPrefixRow struct {
+	NormalizedQuery string    `json:"normalized_query"`
+	DisplayQuery    string    `json:"display_query"`
+	LastUsedAt      time.Time `json:"last_used_at"`
+	UseCount        int32     `json:"use_count"`
+}
+
+// The personal suggestion stream (§1.6c): the signed-in user's own non-hidden
+// recent queries matching the prefix, most-recent first.
+func (q *Queries) SuggestUserHistoryPrefix(ctx context.Context, arg SuggestUserHistoryPrefixParams) ([]SuggestUserHistoryPrefixRow, error) {
+	rows, err := q.db.Query(ctx, suggestUserHistoryPrefix, arg.UserID, arg.Prefix, arg.Lim)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SuggestUserHistoryPrefixRow
+	for rows.Next() {
+		var i SuggestUserHistoryPrefixRow
+		if err := rows.Scan(
+			&i.NormalizedQuery,
+			&i.DisplayQuery,
+			&i.LastUsedAt,
+			&i.UseCount,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

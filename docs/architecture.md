@@ -53,10 +53,13 @@ IDs — never rendered content.
 - **Scoring in SQL, blending in Go.** Simple search computes its score in a
   single SQL round-trip (`SearchSimple`); the suggestion blend and its weights
   live in `internal/ranking` as pure, unit-tested functions.
-- **W2 seams.** The aggregate-query suggestion stream is an interface with a
-  no-op implementation today, swapped for a `query_aggregates`-backed reader in
-  W2 without touching the pipeline. Behavioral events are already accepted and
-  counted; they are persisted in W2.
+- **Behavioral pipeline (W2).** Behavioral events are persisted to
+  `behavior_events` (plus `query_log`, and — under the `allow_history` rule —
+  personal history/projection tables), then folded by cursor-based background
+  workers into `query_aggregates` (global suggestions), `query_video_engagement`
+  (CTR/meaningful-watch features), and Redis trending ZSETs. Ephemeral session
+  context and trending increments are flushed to Redis after the DB commit. The
+  aggregate-query suggestion stream is now a `query_aggregates`-backed reader.
 
 ## Storage
 
@@ -64,8 +67,13 @@ IDs — never rendered content.
   The golang-migrate ledger lands in `vidra_search_migrations` (in `public`) so
   it never collides with core's `schema_migrations`. The runtime pool sets
   `search_path=search,public`.
-- W1 tables: `documents` (the corpus, with a generated weighted `tsvector` and
-  trigram + prefix indexes), `events_inbox` (dedupe ledger), and
-  `service_config` (policy overlay pushed from core). Later waves add the
-  behavioral, aggregate, co-visitation, and model tables.
-- Redis holds the short-prefix suggestion cache (TTL 60s, prefixes ≤3 chars).
+- Corpus/ledger tables: `documents` (the corpus, with a generated weighted
+  `tsvector` and trigram + prefix indexes), `events_inbox` (dedupe ledger), and
+  `service_config` (policy overlay pushed from core).
+- Behavioral tables (W2): `query_log`, `query_aggregates`, `behavior_events`,
+  `user_search_history`, `user_watch_projection`, `query_video_engagement`, and
+  `worker_cursors` (rollup bookmarks). Later waves add the co-visitation and
+  model tables.
+- Redis holds the short-prefix suggestion cache (TTL 60s, prefixes ≤3 chars),
+  per-session recency lists (`sess:q` / `sess:v`, 2h TTL), the trending ZSETs +
+  per-day HLL/count keys, and the gated `trend:{q,v}:top` lists.

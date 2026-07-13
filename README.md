@@ -6,11 +6,14 @@ It is an internal microservice: only **vidra-core** talks to it, and it returns
 visibility (mutes/blocks/sensitivity). The frontend never calls this service
 directly.
 
-> **Status: W1 (scaffold + simple-mode vertical slice).** Simple-mode search,
-> suggestions, related/home recommendations, and the full event-intake pipeline
-> are live and work with **zero behavioral data**. Behavioral analytics,
-> aggregates, trending, personal history, and learned ranking arrive in later
-> waves (W2/W3).
+> **Status: W2 (behavioral analytics + trending + privacy).** Simple-mode search,
+> suggestions, and related/home recommendations work with **zero behavioral
+> data**; on top of that, behavioral events are now persisted and folded by
+> background workers into global query aggregates (suggestible-query gating),
+> per-(query,video) engagement, decayed-counter trending (with distinct-user +
+> Wilson gates), personal search history + watch affinity (under an
+> `allow_history` rule), and the user history/privacy endpoints. Learned ranking
+> and co-visitation recommendations arrive in W3.
 
 ## Architecture at a glance
 
@@ -87,11 +90,17 @@ The standalone compose deliberately avoids the main stack's ports
 | `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error`. |
 | `LOG_FORMAT` | `json` | `json` \| `text`. |
 | `METRICS_ENABLED` | `false` | Gates the `/metrics` scrape surface. |
-| `MIN_QUERY_USER_COUNT` | `3` | Distinct-user threshold for a query to become a global suggestion (W2). |
-| `EVENT_RETENTION_DAYS` | `90` | Behavioral-event retention (W2). |
-| `TRENDING_HALF_LIFE_HOURS` | `6` | Trending decay half-life (W2). |
-| `MEANINGFUL_WATCH_SECONDS` | `30` | Meaningful-watch threshold (W2). |
-| `MEANINGFUL_WATCH_PCT` | `30` | Meaningful-watch percent threshold (W2). |
+| `MIN_QUERY_USER_COUNT` | `3` | Distinct-user threshold for a query to become a global suggestion / trend. |
+| `EVENT_RETENTION_DAYS` | `90` | Behavioral-event (`query_log`/`behavior_events`) retention. |
+| `TRENDING_HALF_LIFE_HOURS` | `6` | Trending decayed-counter half-life. |
+| `MEANINGFUL_WATCH_SECONDS` | `30` | Meaningful-watch absolute threshold. |
+| `MEANINGFUL_WATCH_PCT` | `30` | Meaningful-watch percent-of-duration threshold. |
+| `SEARCH_QUERY_HALF_LIFE_HOURS` | `168` | Suggestion recency half-life (`query_aggregates.decayed_freq`). |
+| `SEARCH_WATCH_HALF_LIFE_HOURS` | `720` | Watch-affinity decay half-life (`user_watch_projection`). |
+| `SEARCH_TREND_CAP_WINDOW` | `1h` | Per-user trending contribution cap window. |
+| `SEARCH_TRENDING_WILSON_FLOOR` | `0.10` | Wilson lower-bound min-volume gate for trending. |
+| `SEARCH_WORKERS_ENABLED` | `true` | Run the background rollup/sweeper/retention loops. |
+| `SEARCH_{AGGREGATES,ENGAGEMENT,SESSIONIZER,TRENDING,RETENTION,RECONCILE_GUARD}_INTERVAL` | `1m/5m/5m/1m/24h/10m` | Worker cadences. |
 
 Policy knobs (`MIN_QUERY_USER_COUNT`, retention, half-life, …) are boot-time
 fallbacks; vidra-core overrides them at runtime via the `search.config_updated`

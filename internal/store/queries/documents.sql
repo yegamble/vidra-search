@@ -68,10 +68,14 @@ SET eligible = false, suppressed_reason = @reason, indexed_at = now()
 WHERE channel_id = @channel_id;
 
 -- name: SuppressOwnerDocuments :exec
--- user.suppress with unlisted=true: hide everything the owner has.
+-- user.suppress with unlisted=true: hide the owner's currently-VISIBLE documents.
+-- The `AND eligible` guard is essential: without it this would stamp
+-- suppressed_reason='owner_unlisted' onto docs already hidden for another reason
+-- (deleted/blocked/private), and RestoreOwnerDocuments would then wrongly
+-- re-enable them on relist. Only docs this stamp actually hid are later restored.
 UPDATE search.documents
 SET eligible = false, suppressed_reason = @reason, indexed_at = now()
-WHERE owner_id = @owner_id;
+WHERE owner_id = @owner_id AND eligible;
 
 -- name: RestoreOwnerDocuments :exec
 -- user.suppress with unlisted=false: undo ONLY the owner-unlisted suppression.

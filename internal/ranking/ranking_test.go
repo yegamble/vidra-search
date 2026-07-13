@@ -77,6 +77,67 @@ func TestBlendReservesDocSlot(t *testing.T) {
 	}
 }
 
+func TestBlendTrendingBoost(t *testing.T) {
+	// Two otherwise-identical doc candidates; the trending one ranks first.
+	cands := []Candidate{
+		{Text: "quiet topic", Kind: KindQuery, Source: SourceDoc, ExactPrefix: true, Popularity: 100},
+		{Text: "hot topic", Kind: KindQuery, Source: SourceDoc, ExactPrefix: true, Popularity: 100, Trending: true},
+	}
+	got := Blend(cands, 10, DefaultWeights)
+	if got[0].Text != "hot topic" {
+		t.Fatalf("trending candidate should rank first, got %v", texts(got))
+	}
+}
+
+func TestBlendAggregateAndPersonalStreams(t *testing.T) {
+	// An aggregate (global) query, a doc-derived title, and a personal-history
+	// entry all blend; the personal entry keeps is_personal + type=history.
+	cands := []Candidate{
+		{Text: "golang jobs", Kind: KindQuery, Source: SourceQuery, ExactPrefix: true, Popularity: 900},
+		{Text: "golang basics", Kind: KindQuery, Source: SourceDoc, ExactPrefix: true, Popularity: 10},
+		{Text: "golang generics", Kind: KindHistory, Source: SourceHistory, ExactPrefix: true, IsPersonal: true, Popularity: 3},
+	}
+	got := Blend(cands, 10, DefaultWeights)
+	if len(got) != 3 {
+		t.Fatalf("expected all three streams represented, got %v", texts(got))
+	}
+	var personal *Suggestion
+	for i := range got {
+		if got[i].Text == "golang generics" {
+			personal = &got[i]
+		}
+	}
+	if personal == nil || !personal.IsPersonal || personal.Type != KindHistory {
+		t.Fatalf("personal entry must be is_personal + type=history, got %+v", personal)
+	}
+}
+
+func TestBlendReservesPersonalSlot(t *testing.T) {
+	// Fill the window with strong aggregate candidates plus one weak personal-
+	// history entry that must be reserved into the top slots.
+	var cands []Candidate
+	for i := 0; i < 5; i++ {
+		cands = append(cands, Candidate{
+			Text: string(rune('a'+i)) + "-agg", Kind: KindQuery, Source: SourceQuery,
+			ExactPrefix: true, Popularity: 1000,
+		})
+	}
+	cands = append(cands, Candidate{
+		Text: "zzz-personal", Kind: KindHistory, Source: SourceHistory,
+		ExactPrefix: true, IsPersonal: true, Popularity: 1,
+	})
+	got := Blend(cands, 3, DefaultWeights)
+	found := false
+	for _, s := range got {
+		if s.Text == "zzz-personal" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("a personal (history) slot must be reserved, got %v", texts(got))
+	}
+}
+
 func TestBlendRespectsLimit(t *testing.T) {
 	var cands []Candidate
 	for i := 0; i < 20; i++ {

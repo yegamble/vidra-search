@@ -17,11 +17,16 @@ import (
 // method, the Echo ROUTE TEMPLATE (never a raw URL/id/query), a status class,
 // and a fixed set of event type/outcome values.
 type Metrics struct {
-	registry *prometheus.Registry
-	requests *prometheus.CounterVec
-	duration *prometheus.HistogramVec
-	events   *prometheus.CounterVec
-	suggest  prometheus.Histogram
+	registry           *prometheus.Registry
+	requests           *prometheus.CounterVec
+	duration           *prometheus.HistogramVec
+	events             *prometheus.CounterVec
+	suggest            prometheus.Histogram
+	eventLag           prometheus.Histogram
+	rollupDuration     *prometheus.HistogramVec
+	workerErrors       *prometheus.CounterVec
+	trendingRejections *prometheus.CounterVec
+	reconcileAge       prometheus.Gauge
 }
 
 // NewMetrics builds the instruments on a fresh private registry, together with
@@ -48,8 +53,31 @@ func NewMetrics() *Metrics {
 			Help:    "Suggestion pipeline duration in seconds (normalize → candidates → blend).",
 			Buckets: []float64{.001, .0025, .005, .01, .025, .05, .1, .25, .5, 1},
 		}),
+		eventLag: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name:    "vidra_search_event_lag_seconds",
+			Help:    "Delay between an event's occurred_at and its processing at intake.",
+			Buckets: []float64{.05, .1, .25, .5, 1, 2.5, 5, 10, 30, 60, 300},
+		}),
+		rollupDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "vidra_search_rollup_duration_seconds",
+			Help:    "Background worker pass duration in seconds, labelled by worker.",
+			Buckets: []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10},
+		}, []string{"worker"}),
+		workerErrors: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "vidra_search_worker_errors_total",
+			Help: "Total background worker pass failures, labelled by worker.",
+		}, []string{"worker"}),
+		trendingRejections: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "vidra_search_trending_gate_rejections_total",
+			Help: "Trending candidates rejected by a gate, labelled by domain and reason.",
+		}, []string{"domain", "reason"}),
+		reconcileAge: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "vidra_search_reconcile_age_seconds",
+			Help: "Seconds since the last reconcile.end was received (-1 if none on record).",
+		}),
 	}
-	reg.MustRegister(m.requests, m.duration, m.events, m.suggest)
+	reg.MustRegister(m.requests, m.duration, m.events, m.suggest,
+		m.eventLag, m.rollupDuration, m.workerErrors, m.trendingRejections, m.reconcileAge)
 	reg.MustRegister(
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
@@ -78,6 +106,73 @@ func (m *Metrics) ObserveEvent(typ, outcome string) {
 // ObserveSuggest records one suggestion pipeline duration.
 func (m *Metrics) ObserveSuggest(d time.Duration) {
 	m.suggest.Observe(d.Seconds())
+}
+
+// ObserveEventLag records the occurred_at→processed delay for one event.
+func (m *Metrics) ObserveEventLag(seconds float64) {
+	if seconds < 0 {
+		return
+	}
+	m.eventLag.Observe(seconds)
+}
+
+// ObserveRollup records one background worker pass duration.
+func (m *Metrics) ObserveRollup(worker string, seconds float64) {
+	m.rollupDuration.WithLabelValues(worker).Observe(seconds)
+}
+
+// IncWorkerError counts one worker pass failure.
+func (m *Metrics) IncWorkerError(worker string) {
+	m.workerErrors.WithLabelValues(worker).Inc()
+}
+
+// IncTrendingRejection counts one gate-rejected trending candidate.
+func (m *Metrics) IncTrendingRejection(domain, reason string) {
+	m.trendingRejections.WithLabelValues(domain, reason).Inc()
+}
+
+// SetReconcileAge records the age of the last reconcile.end.
+func (m *Metrics) SetReconcileAge(seconds float64) {
+	m.reconcileAge.Set(seconds)
+}
+
+// TableDepth is one table's approximate row count.
+type TableDepth struct {
+	Table string
+	Rows  int64
+}
+
+// RegisterTableDepthSource installs vidra_search_table_rows{table} pulled from
+// source at scrape time (no background goroutine). A source error is swallowed so
+// a transient DB hiccup never fails the scrape. Call at most once.
+func (m *Metrics) RegisterTableDepthSource(source func(context.Context) ([]TableDepth, error)) {
+	m.registry.MustRegister(&tableDepthCollector{
+		desc: prometheus.NewDesc(
+			"vidra_search_table_rows",
+			"Approximate row count per search-schema table (planner statistics).",
+			[]string{"table"}, nil,
+		),
+		source: source,
+	})
+}
+
+type tableDepthCollector struct {
+	desc   *prometheus.Desc
+	source func(context.Context) ([]TableDepth, error)
+}
+
+func (c *tableDepthCollector) Describe(ch chan<- *prometheus.Desc) { ch <- c.desc }
+
+func (c *tableDepthCollector) Collect(ch chan<- prometheus.Metric) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	rows, err := c.source(ctx)
+	if err != nil {
+		return
+	}
+	for _, r := range rows {
+		ch <- prometheus.MustNewConstMetric(c.desc, prometheus.GaugeValue, float64(r.Rows), r.Table)
+	}
 }
 
 // DocCount is one document-count sample partitioned by eligibility.
