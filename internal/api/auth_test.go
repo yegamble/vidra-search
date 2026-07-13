@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
@@ -67,6 +68,48 @@ func TestInternalAuthPathMismatch(t *testing.T) {
 	header := BuildInternalAuthHeader(testSecret, ts, http.MethodGet, "/internal/v1/suggestions")
 	if rec := invokeAuth(t, header); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("path mismatch should 401, got %d", rec.Code)
+	}
+}
+
+// TestInternalAuthDecodedPathParam proves the HMAC is verified over the DECODED
+// request path (r.URL.Path), so vidra-core can sign the decoded path while sending
+// the percent-escaped form on the wire — the case for
+// DELETE /internal/v1/users/{id}/search-history/{normalized_query} whose query key
+// may contain a space or CJK characters.
+func TestInternalAuthDecodedPathParam(t *testing.T) {
+	const uid = "11111111-1111-1111-1111-111111111111"
+	query := "café 東京" // space + non-ASCII
+	decodedPath := "/internal/v1/users/" + uid + "/search-history/" + query
+	rawTarget := "/internal/v1/users/" + uid + "/search-history/" + url.PathEscape(query)
+
+	ts := time.Now().Unix()
+	// core signs the DECODED path.
+	header := BuildInternalAuthHeader(testSecret, ts, http.MethodDelete, decodedPath)
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodDelete, rawTarget, nil)
+	req.Header.Set(internalAuthHeader, header)
+	if req.URL.Path != decodedPath {
+		t.Fatalf("server should observe the decoded path %q, got %q", decodedPath, req.URL.Path)
+	}
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/internal/v1/users/:user_id/search-history/:normalized_query")
+	h := internalAuth(testSecret)(func(c echo.Context) error { return c.NoContent(http.StatusOK) })
+	_ = h(c)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("decoded-path-signed header should validate, got %d %s", rec.Code, rec.Body.String())
+	}
+	// The escaped-path signature must NOT validate (server never uses EscapedPath).
+	badHeader := BuildInternalAuthHeader(testSecret, ts, http.MethodDelete, rawTarget)
+	rec2 := httptest.NewRecorder()
+	req2 := httptest.NewRequest(http.MethodDelete, rawTarget, nil)
+	req2.Header.Set(internalAuthHeader, badHeader)
+	c2 := e.NewContext(req2, rec2)
+	c2.SetPath("/internal/v1/users/:user_id/search-history/:normalized_query")
+	_ = internalAuth(testSecret)(func(c echo.Context) error { return c.NoContent(http.StatusOK) })(c2)
+	if rec2.Code == http.StatusOK {
+		t.Fatalf("a signature over the escaped path must not validate (server verifies decoded path)")
 	}
 }
 
