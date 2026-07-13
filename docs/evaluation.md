@@ -32,17 +32,61 @@ METRICS_ENABLED=true make run
 RPS=50 DURATION=30s make loadtest
 ```
 
-The driver signs each request with the same HMAC construction vidra-core uses,
-hits `/internal/v1/suggestions` with a realistic mix of 1–4 character prefixes
-drawn from the seeded vocabulary, and reports **p50 / p95 / p99 / max** over all
-successful responses. Because the seed corpus uses a fixed RNG seed, runs are
-comparable across machines and over time.
+The driver signs each request with the same HMAC construction vidra-core uses and
+reports **p50 / p95 / p99 / max** over all successful responses. The workload is
+endpoint-appropriate (`-endpoint`): `suggestions` fires a realistic mix of 1–4
+character **prefixes** (the autocomplete workload); `search` fires specific
+full-word **topic queries** (each resolving to a handful of documents, like a real
+user query — short 1–2 char prefixes are not a representative search workload, and
+pg_trgm cannot use its index below 3 characters). Because the seed corpus uses a
+fixed RNG seed, runs are comparable across machines and over time.
+
+The seeded corpus weaves a large synthetic topic vocabulary (`numTopics`) into
+every title so that query selectivity mirrors a real catalogue: with only the
+small adjective/noun vocabulary every term would match 5–14 % of the corpus
+(pathologically dense), so a topic word is used per title and a topic query
+matches ≈ `n / numTopics` documents (index-driven recall, not a full scan).
 
 Server-side, the `vidra_search_suggest_duration_seconds` histogram measures the
 suggestion pipeline in isolation (independent of HTTP framing), and
-`vidra_search_http_request_duration_seconds` captures the full request. Compare
-the driver's client-side percentiles against these to separate network/framing
-overhead from pipeline cost.
+`vidra_search_http_request_duration_seconds{route}` captures the full request per
+endpoint. Compare the driver's client-side percentiles against these to separate
+network/framing overhead from pipeline cost.
+
+## Results (W7 — 2026-07-13)
+
+Environment: local Docker on Apple Silicon (darwin/arm64), Postgres 16 + Redis 7
+(vidra-search standalone stack, host ports 5433/6380/8082), Go 1.26.2. Corpus:
+100 000 synthetic documents (fixed RNG seed). Load: 50 rps for 30 s per run after
+a 10 s warm-up. Client percentiles are from `scripts/loadtest`; server percentiles
+are `histogram_quantile` over the service's own histograms.
+
+| Surface | Target | Client p50 / p95 / p99 | Server p95 | Result |
+|---------|--------|------------------------|-----------|--------|
+| Suggestions — internal | p95 < 50 ms | 0.8 / 37.6 / 48.7 ms | ≤ 50 ms (`suggest_duration`) | **PASS** |
+| Search — internal | p95 < 300 ms | 4.7 / 6.9 / 13.0 ms | ≤ 10 ms (`http…{route="/internal/v1/search"}`) | **PASS** |
+| Suggestions — end-to-end (through vidra-core) | p95 < 100 ms | 6.6 / 10.0 / 13.2 ms | — | **PASS** |
+
+All runs completed with **zero errors** (`ok=1499 / 1499` internal; e2e against the
+live 11-document stack).
+
+Caveats & fixes made during W7:
+
+- **Index-driven recall (migration `0014` + query rewrite).** The simple/advanced
+  search recall and the suggestion typo-fallback originally used the *function*
+  form `similarity(lower(title), q) >= 0.3`, which cannot use a trigram index and
+  forced a **sequential scan of every document on every query** (~450 ms single
+  request at 100k, collapsing to multi-second timeouts under 50 rps). The recall
+  now uses the `%` operator against a new `lower(title) gin_trgm_ops` index (plus
+  `tags @> ARRAY[q]` and an index-usable channel-name equality), giving a
+  BitmapOr across the tsv/trigram/tags/channel indexes (~0.4 ms for a selective
+  query). This is the change that makes the search target reachable at scale.
+- **Representative corpus.** The seeder now weaves the topic vocabulary described
+  above; without it every query matched a large fraction of the tiny vocabulary
+  and no query was ever selective (unlike a real catalogue).
+- The e2e figure is measured against the running whole-stack (11 documents), so it
+  reflects core routing + the HMAC S2S hop rather than large-corpus query cost;
+  the internal search figure above is the 100k-corpus number.
 
 ## Quality metrics
 

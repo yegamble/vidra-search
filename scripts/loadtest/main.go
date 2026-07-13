@@ -9,6 +9,10 @@
 //	# drive the running service at 50 rps for 30s (needs the api up + secret)
 //	INTERNAL_SECRET=... go run ./scripts/loadtest -mode=drive \
 //	    -base=http://localhost:8081 -rps=50 -duration=30s
+//
+//	# drive the search endpoint instead of suggestions
+//	INTERNAL_SECRET=... go run ./scripts/loadtest -mode=drive \
+//	    -endpoint=search -base=http://localhost:8081 -rps=50 -duration=30s
 package main
 
 import (
@@ -37,12 +41,38 @@ var (
 	categories = []string{"education", "music", "gaming", "sports", "news", "tech"}
 )
 
+// numTopics is the size of the synthetic "topic" vocabulary woven into every
+// title. A real 100k-video corpus has tens of thousands of distinct title words,
+// so a specific search query matches only a small fraction of documents; with
+// only the 44 adjective/noun words the corpus would be pathologically dense
+// (every term matching ~5–14% of docs), which is not representative of real
+// search selectivity. Each title carries one topic word, so a topic query
+// matches ≈ n/numTopics documents (index-driven recall, not a full scan).
+const numTopics = 8000
+
+// topicWord maps a topic index to a deterministic 7-letter pseudo-word. The
+// multiply-by-a-large-prime spreads consecutive indices across the keyspace so
+// distinct topics share few trigrams (a shared prefix like "topic00042" would be
+// trigram-similar to every other topic and make the `%` recall match the whole
+// table — the opposite of a representative, selective query).
+func topicWord(i int) string {
+	x := uint64(i)*2654435761 + 1099511628211
+	const alpha = "abcdefghijklmnopqrstuvwxyz"
+	b := make([]byte, 7)
+	for j := range b {
+		b[j] = alpha[x%26]
+		x /= 26
+	}
+	return string(b)
+}
+
 func main() {
 	mode := flag.String("mode", "seed", "seed | drive")
 	n := flag.Int("n", 100000, "number of synthetic documents to seed")
 	base := flag.String("base", envOr("SEARCH_BASE_URL", "http://localhost:8081"), "base URL of the running service (drive mode)")
 	rps := flag.Int("rps", 50, "target requests per second (drive mode)")
 	duration := flag.Duration("duration", 30*time.Second, "load duration (drive mode)")
+	endpoint := flag.String("endpoint", "suggestions", "suggestions | search (drive mode)")
 	flag.Parse()
 
 	switch *mode {
@@ -52,7 +82,12 @@ func main() {
 			os.Exit(1)
 		}
 	case "drive":
-		if err := drive(*base, *rps, *duration); err != nil {
+		path, ok := endpointPath(*endpoint)
+		if !ok {
+			fmt.Fprintln(os.Stderr, "unknown endpoint:", *endpoint, "(want suggestions | search)")
+			os.Exit(2)
+		}
+		if err := drive(*base, path, buildQueries(*endpoint), *rps, *duration); err != nil {
 			fmt.Fprintln(os.Stderr, "drive:", err)
 			os.Exit(1)
 		}
@@ -80,7 +115,7 @@ func seed(n int) error {
 	rows := make([][]any, 0, n)
 	now := time.Now().UTC()
 	for i := 0; i < n; i++ {
-		title := fmt.Sprintf("%s %s %s", pick(r, adjectives), pick(r, nouns), pick(r, nouns))
+		title := fmt.Sprintf("%s %s %s", pick(r, adjectives), topicWord(r.Intn(numTopics)), pick(r, nouns))
 		channelID := uuid.New()
 		chName := pick(r, adjectives) + " channel"
 		tags := []string{pick(r, adjectives), pick(r, nouns)}
@@ -102,12 +137,24 @@ func seed(n int) error {
 
 // drive fires suggestion requests at the target rate for the duration and prints
 // the latency distribution.
-func drive(base string, rps int, duration time.Duration) error {
+// endpointPath maps the -endpoint flag to the internal path driven under load.
+func endpointPath(endpoint string) (string, bool) {
+	switch endpoint {
+	case "suggestions":
+		return "/internal/v1/suggestions", true
+	case "search":
+		return "/internal/v1/search", true
+	default:
+		return "", false
+	}
+}
+
+func drive(base, path string, queries []string, rps int, duration time.Duration) error {
 	secret := os.Getenv("INTERNAL_SECRET")
 	if secret == "" {
 		secret = "dev-insecure-internal-secret-change-me-0000"
 	}
-	prefixes := buildPrefixes()
+	prefixes := queries
 	client := &http.Client{Timeout: 5 * time.Second}
 
 	var (
@@ -131,7 +178,7 @@ func drive(base string, rps int, duration time.Duration) error {
 		wg.Add(1)
 		go func(prefix string) {
 			defer wg.Done()
-			d, err := oneRequest(client, base, secret, prefix)
+			d, err := oneRequest(client, base, path, secret, prefix)
 			mu.Lock()
 			if err != nil {
 				errCount++
@@ -157,8 +204,7 @@ func drive(base string, rps int, duration time.Duration) error {
 	return nil
 }
 
-func oneRequest(client *http.Client, base, secret, prefix string) (time.Duration, error) {
-	path := "/internal/v1/suggestions"
+func oneRequest(client *http.Client, base, path, secret, prefix string) (time.Duration, error) {
 	req, err := http.NewRequest(http.MethodGet, base+path+"?q="+prefix+"&limit=10", nil)
 	if err != nil {
 		return 0, err
@@ -176,6 +222,33 @@ func oneRequest(client *http.Client, base, secret, prefix string) (time.Duration
 		return 0, fmt.Errorf("status %d", resp.StatusCode)
 	}
 	return elapsed, nil
+}
+
+// buildQueries returns the query set for the driven endpoint: short prefixes for
+// autocomplete (suggestions), and full words / two-word phrases for search —
+// short 1–2 char prefixes are the autocomplete workload, not the search one (and
+// pg_trgm cannot use its index below 3 chars, so they are not representative of
+// real search traffic).
+func buildQueries(endpoint string) []string {
+	if endpoint == "search" {
+		return buildSearchTerms()
+	}
+	return buildPrefixes()
+}
+
+// buildSearchTerms builds a representative search workload: specific topic words
+// (each matching ≈ n/numTopics documents, like a real user query that resolves to
+// a handful of results) mixed with "topic noun" two-word phrases. Full words, all
+// >= 3 chars — short 1–2 char prefixes are the autocomplete workload, not search.
+func buildSearchTerms() []string {
+	out := make([]string, 0, numTopics+len(nouns))
+	for i := 0; i < numTopics; i++ {
+		out = append(out, topicWord(i))
+		if i < len(nouns) { // a spread of two-term phrases exercises AND recall
+			out = append(out, topicWord(i)+"%20"+nouns[i])
+		}
+	}
+	return out
 }
 
 // buildPrefixes derives a realistic mix of 1–4 character prefixes from the

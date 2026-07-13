@@ -37,6 +37,56 @@ All metrics use the `vidra_search_` prefix on a private registry:
 Route labels are always the bounded Echo template — never a raw URL — so
 cardinality stays flat.
 
+### Key PromQL queries
+
+Copy-paste queries for the critical signals (dashboards + alert rules). All
+`_bucket` histograms need the `sum by (le)` regrouping for `histogram_quantile`.
+
+- **Suggestion latency (internal pipeline) p95/p99** — target p95 < 50 ms:
+  ```promql
+  histogram_quantile(0.95, sum by (le) (rate(vidra_search_suggest_duration_seconds_bucket[5m])))
+  histogram_quantile(0.99, sum by (le) (rate(vidra_search_suggest_duration_seconds_bucket[5m])))
+  ```
+- **Search latency (internal) p95** — target p95 < 300 ms:
+  ```promql
+  histogram_quantile(0.95, sum by (le) (
+    rate(vidra_search_http_request_duration_seconds_bucket{route="/internal/v1/search"}[5m])))
+  ```
+  (swap the route for `/internal/v1/suggestions` to see suggestion latency incl.
+  HTTP framing; and `sum by (le, route)` to chart every endpoint at once.)
+- **Event lag** (outbox → index freshness of *behaviour*) p95, seconds:
+  ```promql
+  histogram_quantile(0.95, sum by (le) (rate(vidra_search_event_lag_seconds_bucket[5m])))
+  ```
+  A rising tail means core's outbox is backing up — cross-check the outbox drain
+  on the core side.
+- **Queue / rollup backlog depth** — the worker-input tables (rows awaiting a
+  rollup pass) and worker health:
+  ```promql
+  vidra_search_table_rows{table=~"behavior_events|query_log|events_inbox"}
+  histogram_quantile(0.95, sum by (le, worker) (rate(vidra_search_rollup_duration_seconds_bucket[15m])))
+  sum by (worker) (rate(vidra_search_worker_errors_total[15m]))
+  ```
+  Backlog that grows monotonically while `rollup_duration` is flat means a worker
+  is wedged (check `worker_errors_total`).
+- **Index freshness** — staleness of the document index vs the source catalogue:
+  ```promql
+  vidra_search_reconcile_age_seconds                 # seconds since last reconcile.end; alert > 48h (172800)
+  vidra_search_documents{eligible="true"}            # eligible corpus size; alert on a sharp drop
+  ```
+- **Unsafe-impression proxy.** Per-viewer visibility (mutes/blocks/sensitivity) is
+  enforced in vidra-core when it hydrates the returned ids, so the true
+  unsafe-impression rate is a core metric; the search-side proxies are the safety
+  gates firing and the share of ineligible docs the index is holding (which the
+  queries filter out but must never serve):
+  ```promql
+  sum by (reason) (rate(vidra_search_trending_gate_rejections_total[5m]))   # safety gates actively rejecting
+  vidra_search_documents{eligible="false"}
+    / ignoring(eligible) sum without(eligible) (vidra_search_documents)     # ineligible share of the index
+  ```
+  A trending-gate rejection rate that drops to zero (gates stopped firing) or an
+  ineligible share trending toward the eligible set are the signals to alert on.
+
 ## Background workers (W2)
 
 The single binary runs six ticker loops (cadences env-tunable; disable all with
