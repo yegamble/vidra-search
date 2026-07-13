@@ -24,21 +24,25 @@ import (
 
 	"github.com/vidra/vidra-search/internal/cache"
 	"github.com/vidra/vidra-search/internal/event"
+	"github.com/vidra/vidra-search/internal/history"
 	"github.com/vidra/vidra-search/internal/ranking"
 	"github.com/vidra/vidra-search/internal/recommendation"
 	"github.com/vidra/vidra-search/internal/search"
 	"github.com/vidra/vidra-search/internal/store"
 	"github.com/vidra/vidra-search/internal/suggest"
+	"github.com/vidra/vidra-search/internal/worker"
 )
 
 // testEnv bundles the live dependencies and services for a test.
 type testEnv struct {
-	store  *store.Store
-	cache  *cache.Cache
-	events *event.Service
-	sugg   *suggest.Service
-	search *search.Service
-	rec    *recommendation.Service
+	store   *store.Store
+	cache   *cache.Cache
+	events  *event.Service
+	sugg    *suggest.Service
+	search  *search.Service
+	rec     *recommendation.Service
+	history *history.Service
+	worker  *worker.Runner
 }
 
 func newTestEnv(t *testing.T) *testEnv {
@@ -61,19 +65,32 @@ func newTestEnv(t *testing.T) *testEnv {
 	}
 	t.Cleanup(func() { _ = rdb.Close() })
 
-	// Clean slate for every test.
-	if _, err := st.Pool.Exec(ctx, "TRUNCATE search.documents, search.events_inbox, search.service_config RESTART IDENTITY"); err != nil {
+	// Clean slate for every test — Postgres tables and the isolated test Redis.
+	if _, err := st.Pool.Exec(ctx, `TRUNCATE
+		search.documents, search.events_inbox, search.service_config,
+		search.query_log, search.query_aggregates, search.user_search_history,
+		search.user_watch_projection, search.behavior_events,
+		search.query_video_engagement, search.worker_cursors RESTART IDENTITY`); err != nil {
 		t.Fatalf("truncate: %v", err)
+	}
+	if err := rdb.Client.FlushDB(ctx).Err(); err != nil {
+		t.Fatalf("flushdb: %v", err)
 	}
 
 	q := st.Queries()
+	// A per-user trend cap window that easily spans a test run so repeated bumps
+	// from one subject collapse to a single ranking contribution.
+	eventCfg := event.Config{TrendCapWindow: time.Hour, TrendingHalfLifeSeconds: 6 * 3600, WatchHalfLifeHours: 720}
+	workerCfg := worker.Config{MinQueryUserCount: 3, TrendCapWindow: time.Hour, WilsonFloor: 0.10}
 	return &testEnv{
-		store:  st,
-		cache:  rdb,
-		events: event.NewService(st, nil, nil),
-		sugg:   suggest.NewService(q, suggest.NoopAggregate{}, nil, nil),
-		search: search.NewService(q),
-		rec:    recommendation.NewService(q),
+		store:   st,
+		cache:   rdb,
+		events:  event.NewService(st, nil, nil, eventCfg, rdb),
+		sugg:    suggest.NewService(q, suggest.NewStoreAggregate(q), rdb, rdb, rdb, nil),
+		search:  search.NewService(q),
+		rec:     recommendation.NewService(q, rdb),
+		history: history.NewService(st),
+		worker:  worker.NewRunner(st, rdb, workerCfg, nil, nil),
 	}
 }
 
@@ -159,6 +176,37 @@ func TestIntegrationDocumentUpsertEligibility(t *testing.T) {
 	gotDraft, _ := q.GetDocument(ctx, draft.ID)
 	if gotDraft.Eligible || gotDraft.SuppressedReason == nil || *gotDraft.SuppressedReason != "state_draft" {
 		t.Errorf("draft must be ineligible with reason state_draft, got eligible=%v reason=%v", gotDraft.Eligible, gotDraft.SuppressedReason)
+	}
+}
+
+// TestIntegrationOwnerUnlistedPreservesOtherSuppression is the W1-audit fix (#1):
+// suppressing an owner's videos as unlisted must NOT overwrite a stronger
+// suppression reason, and relisting must not resurrect a genuinely deleted video.
+func TestIntegrationOwnerUnlistedPreservesOtherSuppression(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+
+	owner := uuid.New()
+	v := video("Deleted Then Owner Toggled", func(d *event.VideoDoc) { d.OwnerID = ptr(owner) })
+	ingest(t, env, upsertEnvelope(t, v))
+
+	// Hard-delete the video (a stronger reason than owner_unlisted).
+	ingest(t, env, rawEnvelope(t, event.TypeVideoSuppress, map[string]any{"video_id": v.ID, "reason": "deleted"}))
+
+	// Owner goes unlisted, then relists. The unlisted suppress must skip the
+	// already-ineligible (deleted) doc, so the relist restore cannot re-enable it.
+	ingest(t, env, rawEnvelope(t, event.TypeUserSuppress, map[string]any{"user_id": owner, "unlisted": true}))
+	ingest(t, env, rawEnvelope(t, event.TypeUserSuppress, map[string]any{"user_id": owner, "unlisted": false}))
+
+	got, err := env.store.Queries().GetDocument(ctx, v.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Eligible {
+		t.Errorf("deleted video must stay ineligible through an unlist/relist cycle")
+	}
+	if got.SuppressedReason == nil || *got.SuppressedReason != "deleted" {
+		t.Errorf("suppression reason must remain 'deleted', got %v", got.SuppressedReason)
 	}
 }
 
