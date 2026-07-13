@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/vidra/vidra-search/internal/normalize"
 	"github.com/vidra/vidra-search/internal/ranking"
 	"github.com/vidra/vidra-search/internal/store/sqlcgen"
@@ -39,26 +41,71 @@ type Querier interface {
 	SuggestChannelPrefix(ctx context.Context, arg sqlcgen.SuggestChannelPrefixParams) ([]sqlcgen.SuggestChannelPrefixRow, error)
 	SuggestTagPrefix(ctx context.Context, arg sqlcgen.SuggestTagPrefixParams) ([]sqlcgen.SuggestTagPrefixRow, error)
 	SuggestTitleFuzzy(ctx context.Context, arg sqlcgen.SuggestTitleFuzzyParams) ([]sqlcgen.SuggestTitleFuzzyRow, error)
+	SuggestUserHistoryPrefix(ctx context.Context, arg sqlcgen.SuggestUserHistoryPrefixParams) ([]sqlcgen.SuggestUserHistoryPrefixRow, error)
 }
 
-// AggregateSuggester is the global-query-popularity stream. W1 ships a no-op
-// implementation (NoopAggregate); W2 replaces it with a query_aggregates-backed
-// reader without touching the pipeline.
+// AggregateSuggester is the global-query-popularity stream (§1.6a). W2 wires the
+// query_aggregates-backed StoreAggregate; NoopAggregate remains for tests.
 type AggregateSuggester interface {
 	Suggest(ctx context.Context, normalizedPrefix string, hideSensitive bool, limit int) ([]ranking.Candidate, error)
 }
 
-// NoopAggregate is the W1 aggregate stream: it always yields no candidates.
+// NoopAggregate yields no aggregate candidates.
 type NoopAggregate struct{}
 
 func (NoopAggregate) Suggest(context.Context, string, bool, int) ([]ranking.Candidate, error) {
 	return nil, nil
 }
 
+// AggQuerier is the store surface the aggregate stream reads.
+type AggQuerier interface {
+	SuggestAggregatePrefix(ctx context.Context, arg sqlcgen.SuggestAggregatePrefixParams) ([]sqlcgen.SuggestAggregatePrefixRow, error)
+}
+
+// StoreAggregate is the real aggregate stream: suggestible, non-banned queries
+// matching the prefix, ordered by decayed frequency (§1.6a).
+type StoreAggregate struct{ q AggQuerier }
+
+// NewStoreAggregate builds the query_aggregates-backed aggregate stream.
+func NewStoreAggregate(q AggQuerier) StoreAggregate { return StoreAggregate{q: q} }
+
+// Suggest returns the aggregate candidates for a normalized prefix. hideSensitive
+// is unused (aggregates carry no sensitivity); it satisfies the interface.
+func (s StoreAggregate) Suggest(ctx context.Context, normalizedPrefix string, _ bool, limit int) ([]ranking.Candidate, error) {
+	rows, err := s.q.SuggestAggregatePrefix(ctx, sqlcgen.SuggestAggregatePrefixParams{
+		Prefix: likePrefix(normalizedPrefix), Lim: int32(limit),
+	})
+	if err != nil {
+		return nil, err
+	}
+	cands := make([]ranking.Candidate, 0, len(rows))
+	for _, r := range rows {
+		text := r.DisplayQuery
+		if text == "" {
+			text = r.NormalizedQuery
+		}
+		cands = append(cands, ranking.Candidate{
+			Text: text, Kind: ranking.KindQuery, Source: ranking.SourceQuery,
+			ExactPrefix: true, Popularity: r.DecayedFreq,
+		})
+	}
+	return cands, nil
+}
+
 // Cache is the optional Redis-backed short-prefix cache.
 type Cache interface {
 	Get(ctx context.Context, key string) ([]byte, bool)
 	Set(ctx context.Context, key string, value []byte, ttl time.Duration)
+}
+
+// SessionReader supplies the current session's recent normalized queries (§1.6c).
+type SessionReader interface {
+	SessionQueries(ctx context.Context, sessionID string) []string
+}
+
+// TrendReader supplies the current trending-query set for the small blend boost.
+type TrendReader interface {
+	TrendingQuerySet(ctx context.Context) map[string]float64
 }
 
 // Request is a suggestion request (already parsed from the HTTP query).
@@ -84,22 +131,24 @@ type Response struct {
 
 // Service runs the suggestion pipeline.
 type Service struct {
-	q      Querier
-	agg    AggregateSuggester
-	cache  Cache
-	logger *slog.Logger
+	q       Querier
+	agg     AggregateSuggester
+	cache   Cache
+	session SessionReader
+	trend   TrendReader
+	logger  *slog.Logger
 }
 
-// NewService builds the service. agg defaults to NoopAggregate; cache/logger may
-// be nil.
-func NewService(q Querier, agg AggregateSuggester, cache Cache, logger *slog.Logger) *Service {
+// NewService builds the service. agg defaults to NoopAggregate; cache, session,
+// trend, and logger may be nil.
+func NewService(q Querier, agg AggregateSuggester, cache Cache, session SessionReader, trend TrendReader, logger *slog.Logger) *Service {
 	if agg == nil {
 		agg = NoopAggregate{}
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Service{q: q, agg: agg, cache: cache, logger: logger}
+	return &Service{q: q, agg: agg, cache: cache, session: session, trend: trend, logger: logger}
 }
 
 // Suggest runs the pipeline and always returns a Response — on any internal
@@ -121,8 +170,13 @@ func (s *Service) Suggest(ctx context.Context, req Request) Response {
 		mode = "simple"
 	}
 
+	// The shared prefix cache is ONLY consulted for non-personalized requests —
+	// serving one user's history/session results to another would be a privacy
+	// leak, so a request carrying include_history + a user/session bypasses it.
+	personalized := req.IncludeHistory && (req.UserID != "" || req.SessionID != "")
+	cacheable := s.cache != nil && !personalized && len([]rune(normalized)) <= cachePrefixMax
 	cacheKey := fmt.Sprintf("sugg:%s:%t:%s", mode, req.HideSensitive, normalized)
-	if s.cache != nil && len([]rune(normalized)) <= cachePrefixMax {
+	if cacheable {
 		if raw, ok := s.cache.Get(ctx, cacheKey); ok {
 			var cached []ranking.Suggestion
 			if err := json.Unmarshal(raw, &cached); err == nil {
@@ -143,7 +197,7 @@ func (s *Service) Suggest(ctx context.Context, req Request) Response {
 		resp.Suggestions = []ranking.Suggestion{}
 	}
 
-	if s.cache != nil && len([]rune(normalized)) <= cachePrefixMax {
+	if cacheable {
 		if raw, err := json.Marshal(resp.Suggestions); err == nil {
 			s.cache.Set(ctx, cacheKey, raw, cacheTTL)
 		}
@@ -200,12 +254,60 @@ func (s *Service) candidates(ctx context.Context, normalized string, req Request
 		})
 	}
 
-	// Aggregate (global popularity) stream — no-op in W1.
+	// Aggregate (global popularity) stream.
 	aggCands, err := s.agg.Suggest(ctx, normalized, req.HideSensitive, streamLimit)
 	if err != nil {
 		return nil, err
 	}
 	cands = append(cands, aggCands...)
+
+	// Personal history stream (§1.6c) — only when history is included and the
+	// request is attributable to a signed-in user. NOT hidden entries only.
+	if req.IncludeHistory && req.UserID != "" {
+		if uid, perr := uuid.Parse(req.UserID); perr == nil {
+			hist, herr := s.q.SuggestUserHistoryPrefix(ctx, sqlcgen.SuggestUserHistoryPrefixParams{
+				UserID: uid, Prefix: like, Lim: streamLimit,
+			})
+			if herr != nil {
+				return nil, herr
+			}
+			for _, r := range hist {
+				text := r.DisplayQuery
+				if text == "" {
+					text = r.NormalizedQuery
+				}
+				cands = append(cands, ranking.Candidate{
+					Text: text, Kind: ranking.KindHistory, Source: ranking.SourceHistory,
+					IsPersonal: true, ExactPrefix: true, Popularity: float64(r.UseCount),
+				})
+			}
+		}
+	}
+
+	// Session recency stream (§1.6c) — best-effort from Redis; the stored queries
+	// are already normalized, so a prefix match is a plain HasPrefix.
+	if req.IncludeHistory && req.SessionID != "" && s.session != nil {
+		for _, rq := range s.session.SessionQueries(ctx, req.SessionID) {
+			if strings.HasPrefix(rq, normalized) {
+				cands = append(cands, ranking.Candidate{
+					Text: rq, Kind: ranking.KindHistory, Source: ranking.SourceHistory,
+					IsPersonal: true, ExactPrefix: true,
+				})
+			}
+		}
+	}
+
+	// Trending boost — mark candidates whose normalized form is currently trending
+	// (best-effort; a small weight in the blend).
+	if s.trend != nil {
+		if trendSet := s.trend.TrendingQuerySet(ctx); len(trendSet) > 0 {
+			for i := range cands {
+				if _, ok := trendSet[normalize.Normalize(cands[i].Text)]; ok {
+					cands[i].Trending = true
+				}
+			}
+		}
+	}
 
 	// Typo fallback only when exact-prefix candidates are short of the limit.
 	exact := 0

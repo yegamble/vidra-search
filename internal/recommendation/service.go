@@ -14,6 +14,7 @@ import (
 
 	"github.com/vidra/vidra-search/internal/pgconv"
 	"github.com/vidra/vidra-search/internal/store/sqlcgen"
+	"github.com/vidra/vidra-search/internal/trending"
 )
 
 // ModelVersion identifies the W1 simple recommender.
@@ -45,6 +46,13 @@ type Querier interface {
 	PopularEligible(ctx context.Context, arg sqlcgen.PopularEligibleParams) ([]sqlcgen.PopularEligibleRow, error)
 	HomeTrending(ctx context.Context, arg sqlcgen.HomeTrendingParams) ([]sqlcgen.HomeTrendingRow, error)
 	HomeRecent(ctx context.Context, arg sqlcgen.HomeRecentParams) ([]sqlcgen.HomeRecentRow, error)
+	ListEligibleByIDs(ctx context.Context, arg sqlcgen.ListEligibleByIDsParams) ([]sqlcgen.ListEligibleByIDsRow, error)
+}
+
+// TrendingReader supplies the gated Redis trending-video list for the home feed.
+// nil disables it (the feed then uses the SQL gravity trending path).
+type TrendingReader interface {
+	TrendingVideos(ctx context.Context) []trending.Scored
 }
 
 // Item is one recommended video with its provenance.
@@ -62,12 +70,14 @@ type Response struct {
 
 // Service composes related and home feeds.
 type Service struct {
-	q Querier
+	q     Querier
+	trend TrendingReader
 }
 
-// NewService builds the recommendation service.
-func NewService(q Querier) *Service {
-	return &Service{q: q}
+// NewService builds the recommendation service. trend may be nil (home then uses
+// the SQL gravity trending path).
+func NewService(q Querier, trend TrendingReader) *Service {
+	return &Service{q: q, trend: trend}
 }
 
 // candidate is an internal, pre-scored recommendation with its channel (for the
@@ -150,12 +160,22 @@ func (s *Service) Home(ctx context.Context, limit int, hideSensitive bool, lang 
 	language := optStr(lang)
 	fetch := int32(limit * 2)
 
-	trending, err := s.q.HomeTrending(ctx, sqlcgen.HomeTrendingParams{
-		HideSensitive: hideSensitive, Exclude: nil, Language: language, Lim: fetch,
-	})
-	if err != nil {
-		return Response{}, err
+	// Prefer the gated Redis trending list; fall back to SQL HN-gravity when it is
+	// empty or unavailable (§1.8 home, W2 upgrade).
+	trendingCands := s.redisTrendingCandidates(ctx, hideSensitive)
+	if trendingCands == nil {
+		rows, err := s.q.HomeTrending(ctx, sqlcgen.HomeTrendingParams{
+			HideSensitive: hideSensitive, Exclude: nil, Language: language, Lim: fetch,
+		})
+		if err != nil {
+			return Response{}, err
+		}
+		trendingCands = make([]candidate, 0, len(rows))
+		for _, r := range rows {
+			trendingCands = append(trendingCands, candidate{videoID: r.VideoID, channelID: r.ChannelID, reason: ReasonTrending})
+		}
 	}
+
 	recent, err := s.q.HomeRecent(ctx, sqlcgen.HomeRecentParams{
 		HideSensitive: hideSensitive, Exclude: nil, Language: language, Lim: fetch,
 	})
@@ -169,10 +189,6 @@ func (s *Service) Home(ctx context.Context, limit int, hideSensitive bool, lang 
 		return Response{}, err
 	}
 
-	trendingCands := make([]candidate, 0, len(trending))
-	for _, r := range trending {
-		trendingCands = append(trendingCands, candidate{videoID: r.VideoID, channelID: r.ChannelID, reason: ReasonTrending})
-	}
 	recentCands := make([]candidate, 0, len(recent))
 	for _, r := range recent {
 		recentCands = append(recentCands, candidate{videoID: r.VideoID, channelID: r.ChannelID, reason: ReasonFresh})
@@ -199,6 +215,54 @@ func (s *Service) Home(ctx context.Context, limit int, hideSensitive bool, lang 
 	}
 	resp.Items = comp.items()
 	return resp, nil
+}
+
+// redisTrendingCandidates turns the gated Redis trending-video list into ordered
+// candidates, keeping only the still-eligible (and non-sensitive when requested)
+// documents and preserving the trending order. It returns nil — signalling the
+// caller to fall back to SQL gravity — when the list is unavailable, empty, or
+// yields no eligible videos.
+func (s *Service) redisTrendingCandidates(ctx context.Context, hideSensitive bool) []candidate {
+	if s.trend == nil {
+		return nil
+	}
+	scored := s.trend.TrendingVideos(ctx)
+	if len(scored) == 0 {
+		return nil
+	}
+	ids := make([]uuid.UUID, 0, len(scored))
+	for _, sc := range scored {
+		if id, err := uuid.Parse(sc.Item); err == nil {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	rows, err := s.q.ListEligibleByIDs(ctx, sqlcgen.ListEligibleByIDsParams{HideSensitive: hideSensitive, Ids: ids})
+	if err != nil {
+		return nil
+	}
+	eligible := make(map[uuid.UUID]pgtype.UUID, len(rows))
+	for _, r := range rows {
+		eligible[r.VideoID] = r.ChannelID
+	}
+	cands := make([]candidate, 0, len(scored))
+	for _, sc := range scored {
+		id, err := uuid.Parse(sc.Item)
+		if err != nil {
+			continue
+		}
+		ch, ok := eligible[id]
+		if !ok {
+			continue
+		}
+		cands = append(cands, candidate{videoID: id, channelID: ch, reason: ReasonTrending})
+	}
+	if len(cands) == 0 {
+		return nil
+	}
+	return cands
 }
 
 // --- composer: dedupe + per-channel cap + deterministic scoring ---
