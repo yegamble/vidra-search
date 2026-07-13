@@ -32,11 +32,13 @@ IDs — never rendered content.
 | `internal/event` | Idempotent event intake; applies domain events in a transaction. |
 | `internal/index` | Static eligibility derivation (public + published ⇒ eligible). |
 | `internal/suggest` | Suggestion pipeline (doc streams + typo fallback + blend). |
-| `internal/search` | Simple-mode hybrid search. |
-| `internal/recommendation` | Related and home feed composition. |
-| `internal/ranking` | Pure, deterministic scoring (suggestion blend; search score constants). |
+| `internal/search` | Simple- and advanced-mode search (two-stage funnel). |
+| `internal/recommendation` | Related and home feed composition (simple + advanced). |
+| `internal/ranking` | Pure, deterministic scoring: suggestion blend, simple + advanced ranker, MMR, ε-greedy, co-visitation math. |
+| `internal/model` | Online model serving: leaves LightGBM loader, hot-swap, shadow evaluation. |
+| `internal/experiment` | Deterministic hash-bucketed A/B assignment (RAM cache). |
 | `internal/store` | pgx pool + sqlc-generated typed queries. |
-| `internal/cache` | Redis client (short-prefix suggestion cache). |
+| `internal/cache` | Redis client (short-prefix suggestion cache, session recency). |
 | `internal/telemetry` | slog logger + private Prometheus registry. |
 
 ## Key design decisions
@@ -61,6 +63,52 @@ IDs — never rendered content.
   context and trending increments are flushed to Redis after the DB commit. The
   aggregate-query suggestion stream is now a `query_aggregates`-backed reader.
 
+## Advanced ranking & recommendations (W3)
+
+Advanced mode (gated by the instance `search_mode`; simple stays the zero-data
+default) adds a **two-stage funnel** and learned-model serving on top of the same
+event pipeline.
+
+- **Co-visitation.** The `covis_rollup` worker (15m, cursor-based) folds
+  sessionized co-occurrence into cumulative `co_watch` (plays/meaningful-watches
+  in one session) and `co_search` (results clicked for one query in a session)
+  counters, then rebuilds `item_neighbors` as the **shrunk-cosine** similarity
+  (`raw = cooc/√(totᵢ·totⱼ)`, `shrunk = raw·cooc/(cooc+λ)`, λ=10) blended
+  0.7 co_watch / 0.3 co_search, top-100 neighbors per item. Serving a related feed
+  is then one indexed range scan. The math lives in `ranking.CovisShrunkCosine`
+  (a unit-tested mirror of the `RebuildCovisNeighbors` SQL).
+- **Advanced search.** Stage-1 SQL recall (`SearchAdvancedRecall`, ≤500) unions
+  the simple hybrid recall with the query's top-clicked videos and returns rich
+  per-doc + engagement columns. Stage-2 is a Go rerank (`ranking.Rerank`) over a
+  hand-tuned **linear model**: text score (identical to simple), prior-centred
+  smoothed CTR, meaningful-watch rate, personal/channel/session affinity, language
+  match, and a creator-repetition penalty. With engagement AND personalization
+  zeroed it reduces to exactly the simple ordering (unit-tested invariant), so an
+  anonymous / `personalized=false` request is unchanged.
+- **Advanced recommendations.** Candidates = `item_neighbors` ∪ the simple sets ∪
+  session co-watch (∪ co-watch of the user's recent watches, for home). They are
+  scored by base relevance + affinity + freshness − novelty, **MMR**-diversified
+  (λ=0.7, Jaccard tag/category similarity), capped at 2 per channel, with a
+  seed-deterministic **ε-greedy** exploration slot (ε=0.1, fresh low-view docs) and
+  an accurate `reason` (co_watch / similar / trending / fresh / popular /
+  subscribed-when-channel-affinity-high).
+- **Model serving.** Training is offline Python (`training/`); Go only serves.
+  `train_ranker.py` writes a versioned LightGBM LambdaMART text artifact + SHA-256
+  and registers a `search.models` row with `status='shadow'`. The `model_loader`
+  worker (1m) verifies the active ranker's checksum, loads it via the pure-Go
+  `leaves` library, and hot-swaps it behind an `atomic.Pointer`; a
+  missing/corrupt/malformed artifact keeps the previous model (or the always-
+  available heuristic) and never touches the `models` row. Which ranker serves a
+  request is chosen by **experiment** assignment (`experiment.Bucket` =
+  fnv1a(salt+subject) % 100); the served `model_version` and the experiment
+  variant are stamped into every response and the impression log.
+- **Shadow evaluation.** The `shadow_eval` worker (1h, or `make shadow-eval`)
+  replays the last N days of logged impressions + click/meaningful labels and
+  scores each shadow ranker's NDCG@10 / MRR@10 against the production ordering
+  actually served AND a heuristic re-rank, writing the report to `models.metrics`
+  and Prometheus. **Activation is manual** (`make activate-model`) — never
+  automatic.
+
 ## Storage
 
 - Schema `search` in a PostgreSQL database that may be shared with vidra-core.
@@ -72,8 +120,12 @@ IDs — never rendered content.
   `service_config` (policy overlay pushed from core).
 - Behavioral tables (W2): `query_log`, `query_aggregates`, `behavior_events`,
   `user_search_history`, `user_watch_projection`, `query_video_engagement`, and
-  `worker_cursors` (rollup bookmarks). Later waves add the co-visitation and
-  model tables.
+  `worker_cursors` (rollup bookmarks).
+- Advanced tables (W3): `co_watch` / `co_search` (cumulative co-occurrence
+  counters, normalized `video_a < video_b`), `item_neighbors` (derived
+  shrunk-cosine neighbor index, one indexed range scan per related feed), `models`
+  (the ranker registry: kind/version/status/artifact/metrics), and `experiments`
+  (hash-bucketed variant definitions, cached in RAM).
 - Redis holds the short-prefix suggestion cache (TTL 60s, prefixes ≤3 chars),
   per-session recency lists (`sess:q` / `sess:v`, 2h TTL), the trending ZSETs +
   per-day HLL/count keys, and the gated `trend:{q,v}:top` lists.
