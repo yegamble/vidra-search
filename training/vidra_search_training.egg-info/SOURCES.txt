@@ -1,7 +1,0 @@
-pyproject.toml
-train_ranker.py
-vidra_search_training.egg-info/PKG-INFO
-vidra_search_training.egg-info/SOURCES.txt
-vidra_search_training.egg-info/dependency_links.txt
-vidra_search_training.egg-info/requires.txt
-vidra_search_training.egg-info/top_level.txt
