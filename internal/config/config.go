@@ -61,6 +61,26 @@ type Config struct {
 	TrendingHalfLifeHours  float64
 	MeaningfulWatchSeconds int
 	MeaningfulWatchPct     int
+
+	// Suggestion recency decay half-life (query_aggregates.decayed_freq). Slower
+	// than trending so popular queries stay suggestible for days.
+	QueryHalfLifeHours float64
+	// Watch-affinity decay half-life (user_watch_projection).
+	WatchHalfLifeHours float64
+	// TrendCapWindow bounds how often one (subject,item) may bump a trend score.
+	TrendCapWindow time.Duration
+	// TrendingWilsonFloor is the Wilson lower-bound min-volume gate for trending.
+	TrendingWilsonFloor float64
+
+	// WorkersEnabled gates the background rollup loops.
+	WorkersEnabled bool
+	// Worker cadences (§1.9).
+	AggregatesInterval     time.Duration
+	EngagementInterval     time.Duration
+	SessionizerInterval    time.Duration
+	TrendingInterval       time.Duration
+	RetentionInterval      time.Duration
+	ReconcileGuardInterval time.Duration
 }
 
 // Load reads configuration from the environment, applying safe development
@@ -82,6 +102,15 @@ func Load() (*Config, error) {
 		DatabaseURL:         getEnv("DATABASE_URL", "postgres://vidra_search:vidra_search@localhost:5433/vidra_search?sslmode=disable"),
 		RedisURL:            getEnv("REDIS_URL", "redis://localhost:6380/0"),
 		InternalSecret:      getEnv("INTERNAL_SECRET", devInternalSecret),
+
+		TrendCapWindow:         getEnvDuration("SEARCH_TREND_CAP_WINDOW", time.Hour),
+		WorkersEnabled:         getEnvBool("SEARCH_WORKERS_ENABLED", true),
+		AggregatesInterval:     getEnvDuration("SEARCH_AGGREGATES_INTERVAL", time.Minute),
+		EngagementInterval:     getEnvDuration("SEARCH_ENGAGEMENT_INTERVAL", 5*time.Minute),
+		SessionizerInterval:    getEnvDuration("SEARCH_SESSIONIZER_INTERVAL", 5*time.Minute),
+		TrendingInterval:       getEnvDuration("SEARCH_TRENDING_INTERVAL", time.Minute),
+		RetentionInterval:      getEnvDuration("SEARCH_RETENTION_INTERVAL", 24*time.Hour),
+		ReconcileGuardInterval: getEnvDuration("SEARCH_RECONCILE_GUARD_INTERVAL", 10*time.Minute),
 	}
 
 	port, err := getEnvInt("HTTP_PORT", 8080)
@@ -103,6 +132,15 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if cfg.MeaningfulWatchPct, err = getEnvInt("MEANINGFUL_WATCH_PCT", 30); err != nil {
+		return nil, err
+	}
+	if cfg.QueryHalfLifeHours, err = getEnvFloat("SEARCH_QUERY_HALF_LIFE_HOURS", 168); err != nil {
+		return nil, err
+	}
+	if cfg.WatchHalfLifeHours, err = getEnvFloat("SEARCH_WATCH_HALF_LIFE_HOURS", 720); err != nil {
+		return nil, err
+	}
+	if cfg.TrendingWilsonFloor, err = getEnvFloat("SEARCH_TRENDING_WILSON_FLOOR", 0.10); err != nil {
 		return nil, err
 	}
 
@@ -157,6 +195,18 @@ func (c *Config) validate() error {
 	}
 	if c.MeaningfulWatchPct < 1 || c.MeaningfulWatchPct > 100 {
 		return fmt.Errorf("config: MEANINGFUL_WATCH_PCT must be in [1,100]")
+	}
+	if c.QueryHalfLifeHours <= 0 {
+		return fmt.Errorf("config: SEARCH_QUERY_HALF_LIFE_HOURS must be positive")
+	}
+	if c.WatchHalfLifeHours <= 0 {
+		return fmt.Errorf("config: SEARCH_WATCH_HALF_LIFE_HOURS must be positive")
+	}
+	if c.TrendingWilsonFloor < 0 || c.TrendingWilsonFloor > 1 {
+		return fmt.Errorf("config: SEARCH_TRENDING_WILSON_FLOOR must be in [0,1]")
+	}
+	if c.TrendCapWindow <= 0 {
+		return fmt.Errorf("config: SEARCH_TREND_CAP_WINDOW must be positive")
 	}
 	if c.Environment == "production" {
 		if c.InternalSecret == devInternalSecret {

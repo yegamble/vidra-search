@@ -17,6 +17,7 @@ import (
 
 	"github.com/vidra/vidra-search/internal/config"
 	"github.com/vidra/vidra-search/internal/event"
+	"github.com/vidra/vidra-search/internal/history"
 	"github.com/vidra/vidra-search/internal/recommendation"
 	"github.com/vidra/vidra-search/internal/search"
 	"github.com/vidra/vidra-search/internal/suggest"
@@ -35,6 +36,7 @@ type Services struct {
 	Search  *search.Service
 	Rec     *recommendation.Service
 	Events  *event.Service
+	History *history.Service
 }
 
 // Server holds the Echo instance and its dependencies.
@@ -127,6 +129,10 @@ func (s *Server) routes() {
 	g.GET("/recommendations/related", s.handleRelated)
 	g.GET("/recommendations/home", s.handleHome)
 	g.POST("/events", s.handleEvents)
+	g.GET("/users/:user_id/search-history", s.handleGetSearchHistory)
+	g.DELETE("/users/:user_id/search-history", s.handleClearSearchHistory)
+	g.DELETE("/users/:user_id/search-history/:normalized_query", s.handleDeleteSearchHistoryEntry)
+	g.DELETE("/users/:user_id", s.handleDeleteUser)
 }
 
 // requestLogger emits one structured slog line per request and, when metrics are

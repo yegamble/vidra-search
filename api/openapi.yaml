@@ -22,6 +22,8 @@ tags:
     description: Related and home feeds.
   - name: events
     description: Domain and behavioral event intake.
+  - name: history
+    description: Per-user search history and privacy operations.
 paths:
   /internal/v1/suggestions:
     get:
@@ -310,6 +312,142 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /internal/v1/users/{user_id}/search-history:
+    get:
+      operationId: getUserSearchHistory
+      summary: A user's non-hidden search history (paginated).
+      tags:
+        - history
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: The user's history page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchHistoryResponse'
+        '401':
+          description: Missing or invalid internal authentication.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Invalid parameters.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      operationId: clearUserSearchHistory
+      summary: Clear a user's search history and anonymize their raw logs.
+      tags:
+        - history
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: History cleared.
+        '401':
+          description: Missing or invalid internal authentication.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Invalid parameters.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /internal/v1/users/{user_id}/search-history/{normalized_query}:
+    delete:
+      operationId: deleteUserSearchHistoryEntry
+      summary: Delete a single search-history entry (normalized query is path-escaped).
+      tags:
+        - history
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: normalized_query
+          in: path
+          required: true
+          description: The normalized query key, URL-path-escaped.
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Entry deleted (idempotent).
+        '401':
+          description: Missing or invalid internal authentication.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Invalid parameters.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /internal/v1/users/{user_id}:
+    delete:
+      operationId: deleteUser
+      summary: Full privacy purge for a user (history, projections, anonymized logs).
+      tags:
+        - history
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: User footprint purged.
+        '401':
+          description: Missing or invalid internal authentication.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Invalid parameters.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 components:
   securitySchemes:
     InternalAuth:
@@ -508,3 +646,36 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/EventFailure'
+    HistoryEntry:
+      type: object
+      required:
+        - query
+        - normalized_query
+        - last_used_at
+        - use_count
+      properties:
+        query:
+          type: string
+          description: The user's typed (display) form.
+        normalized_query:
+          type: string
+        last_used_at:
+          type: string
+          format: date-time
+        use_count:
+          type: integer
+    SearchHistoryResponse:
+      type: object
+      required:
+        - entries
+        - limit
+        - offset
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/HistoryEntry'
+        limit:
+          type: integer
+        offset:
+          type: integer
