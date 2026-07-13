@@ -49,9 +49,15 @@ type Config struct {
 	EngagementInterval     time.Duration
 	SessionizerInterval    time.Duration
 	TrendingInterval       time.Duration
+	CovisInterval          time.Duration
 	RetentionInterval      time.Duration
 	ReconcileGuardInterval time.Duration
 	JobTimeout             time.Duration
+
+	// Co-visitation tuning (§1.9 covis_rollup).
+	CovisWindowSeconds float64 // max in-session gap for a co-occurrence pair
+	CovisLambda        float64 // cosine shrinkage λ (algorithms report ≈10)
+	CovisTopM          int     // neighbors kept per item
 
 	// Policy knobs (env fallbacks; service_config overlay wins at runtime).
 	MinQueryUserCount       int
@@ -90,6 +96,7 @@ func (c Config) withDefaults() Config {
 	set(&c.EngagementInterval, 5*time.Minute)
 	set(&c.SessionizerInterval, 5*time.Minute)
 	set(&c.TrendingInterval, time.Minute)
+	set(&c.CovisInterval, 15*time.Minute)
 	set(&c.RetentionInterval, 24*time.Hour)
 	set(&c.ReconcileGuardInterval, 10*time.Minute)
 	set(&c.JobTimeout, 2*time.Minute)
@@ -137,6 +144,15 @@ func (c Config) withDefaults() Config {
 	if c.ProjectionFloor <= 0 {
 		c.ProjectionFloor = 0.05
 	}
+	if c.CovisWindowSeconds <= 0 {
+		c.CovisWindowSeconds = 3600 // 1h in-session co-occurrence window
+	}
+	if c.CovisLambda <= 0 {
+		c.CovisLambda = 10 // shrinkage λ (algorithms report)
+	}
+	if c.CovisTopM < 1 {
+		c.CovisTopM = 100 // top neighbors per item
+	}
 	return c
 }
 
@@ -164,6 +180,7 @@ func (r *Runner) Start(ctx context.Context) {
 	go r.runLoop(ctx, "aggregates_rollup", r.cfg.AggregatesInterval, r.aggregatesRollup)
 	go r.runLoop(ctx, "engagement_rollup", r.cfg.EngagementInterval, r.engagementRollup)
 	go r.runLoop(ctx, "sessionizer", r.cfg.SessionizerInterval, r.sessionizer)
+	go r.runLoop(ctx, "covis_rollup", r.cfg.CovisInterval, r.covisRollup)
 	go r.runLoop(ctx, "retention", r.cfg.RetentionInterval, r.retention)
 	go r.runLoop(ctx, "reconcile_guard", r.cfg.ReconcileGuardInterval, r.reconcileGuard)
 	if r.cache != nil {
@@ -195,6 +212,8 @@ func (r *Runner) RunOnce(ctx context.Context, name string) error {
 		return r.engagementRollup(ctx)
 	case "sessionizer":
 		return r.sessionizer(ctx)
+	case "covis_rollup":
+		return r.covisRollup(ctx)
 	case "trending_sweeper":
 		return r.trendingSweeper(ctx)
 	case "retention":
@@ -455,6 +474,64 @@ func (r *Runner) sessionizer(ctx context.Context) error {
 	}
 
 	if err := q.SetWorkerCursor(ctx, sqlcgen.SetWorkerCursorParams{CursorName: "sessionizer", CursorPos: maxid}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// --- covis_rollup ---
+
+// covisRollup folds new behavioral events into the cumulative co-visitation
+// counters and rebuilds the served neighbor index. It is cursor-based over
+// behavior_events (like the other rollups): each pass counts sessionized
+// co-watch (play_started/meaningful_watch) and co-search (result_clicked sharing
+// a query) pairs whose two events fall within the window, then recomputes
+// shrunk-cosine neighbors (blend 0.7 co_watch / 0.3 co_search, λ shrinkage,
+// top-M per item). Accumulation, rebuild, and the cursor advance share one
+// transaction, so a crash resumes rather than double counts. Deterministic given
+// the same events.
+func (r *Runner) covisRollup(ctx context.Context) error {
+	tx, err := r.store.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := r.store.Queries().WithTx(tx)
+
+	cursor, err := getCursor(ctx, q, "covis")
+	if err != nil {
+		return err
+	}
+	maxid, err := q.MaxBehaviorEventID(ctx)
+	if err != nil {
+		return err
+	}
+	if maxid <= cursor {
+		return tx.Commit(ctx)
+	}
+
+	if err := q.AccumulateCoWatch(ctx, sqlcgen.AccumulateCoWatchParams{
+		Cursor: cursor, Maxid: maxid, WindowSeconds: r.cfg.CovisWindowSeconds,
+	}); err != nil {
+		return err
+	}
+	if err := q.AccumulateCoSearch(ctx, sqlcgen.AccumulateCoSearchParams{
+		Cursor: cursor, Maxid: maxid, WindowSeconds: r.cfg.CovisWindowSeconds,
+	}); err != nil {
+		return err
+	}
+
+	// Recompute the served covis-v1 neighbor index from the current counters.
+	if err := q.ClearCovisNeighbors(ctx); err != nil {
+		return err
+	}
+	if err := q.RebuildCovisNeighbors(ctx, sqlcgen.RebuildCovisNeighborsParams{
+		Lambda: r.cfg.CovisLambda, TopM: int32(r.cfg.CovisTopM),
+	}); err != nil {
+		return err
+	}
+
+	if err := q.SetWorkerCursor(ctx, sqlcgen.SetWorkerCursorParams{CursorName: "covis", CursorPos: maxid}); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

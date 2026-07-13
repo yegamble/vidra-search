@@ -112,6 +112,7 @@ func workerConfig(cfg *config.Config) worker.Config {
 		EngagementInterval:      cfg.EngagementInterval,
 		SessionizerInterval:     cfg.SessionizerInterval,
 		TrendingInterval:        cfg.TrendingInterval,
+		CovisInterval:           cfg.CovisInterval,
 		RetentionInterval:       cfg.RetentionInterval,
 		ReconcileGuardInterval:  cfg.ReconcileGuardInterval,
 		MinQueryUserCount:       cfg.MinQueryUserCount,
@@ -123,6 +124,9 @@ func workerConfig(cfg *config.Config) worker.Config {
 		MeaningfulWatchSeconds:  cfg.MeaningfulWatchSeconds,
 		MeaningfulWatchPct:      cfg.MeaningfulWatchPct,
 		WilsonFloor:             cfg.TrendingWilsonFloor,
+		CovisWindowSeconds:      cfg.CovisWindowSeconds,
+		CovisLambda:             cfg.CovisLambda,
+		CovisTopM:               cfg.CovisTopM,
 	}
 }
 
