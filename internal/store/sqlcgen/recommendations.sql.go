@@ -113,6 +113,47 @@ func (q *Queries) HomeTrending(ctx context.Context, arg HomeTrendingParams) ([]H
 	return items, nil
 }
 
+const listEligibleByIDs = `-- name: ListEligibleByIDs :many
+SELECT d.video_id, d.channel_id
+FROM search.documents d
+WHERE d.eligible
+  AND (NOT $1::bool OR NOT d.is_sensitive)
+  AND d.video_id = ANY($2::uuid[])
+`
+
+type ListEligibleByIDsParams struct {
+	HideSensitive bool        `json:"hide_sensitive"`
+	Ids           []uuid.UUID `json:"ids"`
+}
+
+type ListEligibleByIDsRow struct {
+	VideoID   uuid.UUID   `json:"video_id"`
+	ChannelID pgtype.UUID `json:"channel_id"`
+}
+
+// Fetch the eligible (and, when requested, non-sensitive) documents among a set
+// of ids — used to filter the gated Redis trending list before it feeds the home
+// feed. Order is not preserved here; the caller re-imposes the trending order.
+func (q *Queries) ListEligibleByIDs(ctx context.Context, arg ListEligibleByIDsParams) ([]ListEligibleByIDsRow, error) {
+	rows, err := q.db.Query(ctx, listEligibleByIDs, arg.HideSensitive, arg.Ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListEligibleByIDsRow
+	for rows.Next() {
+		var i ListEligibleByIDsRow
+		if err := rows.Scan(&i.VideoID, &i.ChannelID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const popularEligible = `-- name: PopularEligible :many
 SELECT d.video_id, d.channel_id
 FROM search.documents d

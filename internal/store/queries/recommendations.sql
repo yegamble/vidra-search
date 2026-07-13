@@ -51,6 +51,16 @@ ORDER BY (sqlc.narg('language')::text IS NOT NULL AND d.language = sqlc.narg('la
          score DESC, d.video_id
 LIMIT @lim::int;
 
+-- name: ListEligibleByIDs :many
+-- Fetch the eligible (and, when requested, non-sensitive) documents among a set
+-- of ids — used to filter the gated Redis trending list before it feeds the home
+-- feed. Order is not preserved here; the caller re-imposes the trending order.
+SELECT d.video_id, d.channel_id
+FROM search.documents d
+WHERE d.eligible
+  AND (NOT @hide_sensitive::bool OR NOT d.is_sensitive)
+  AND d.video_id = ANY(@ids::uuid[]);
+
 -- name: HomeRecent :many
 -- Freshest eligible videos, same-language preferred first.
 SELECT d.video_id, d.channel_id
