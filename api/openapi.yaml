@@ -1,0 +1,510 @@
+openapi: 3.0.3
+info:
+  title: vidra-search internal API
+  version: 0.1.0
+  description: >-
+    Internal service API consumed exclusively by vidra-core (never the frontend).
+    Every operation is authenticated with an HMAC header
+    (X-Vidra-Internal-Auth: v1:{unix_ts}:{hex(hmac_sha256(secret, ts+"\n"+METHOD+"\n"+PATH))},
+    ±120s skew). The ops probes (/healthz, /readyz, /version, /metrics) are
+    intentionally NOT part of this contract.
+servers:
+  - url: /
+    description: The service root (internal network).
+security:
+  - InternalAuth: []
+tags:
+  - name: suggestions
+    description: Autosuggest / query completion.
+  - name: search
+    description: Ranked video search (ids only).
+  - name: recommendations
+    description: Related and home feeds.
+  - name: events
+    description: Domain and behavioral event intake.
+paths:
+  /internal/v1/suggestions:
+    get:
+      operationId: getSuggestions
+      summary: Autosuggest completions for a query prefix.
+      tags:
+        - suggestions
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: The raw (un-normalized) query prefix.
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 20
+            default: 10
+        - name: user_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: session_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: personalized
+          in: query
+          required: false
+          schema:
+            type: boolean
+        - name: include_history
+          in: query
+          required: false
+          schema:
+            type: boolean
+        - name: hide_sensitive
+          in: query
+          required: false
+          schema:
+            type: boolean
+        - name: lang
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: mode
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - simple
+              - advanced
+      responses:
+        '200':
+          description: Suggestions (empty on any internal degradation).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuggestionsResponse'
+        '401':
+          description: Missing or invalid internal authentication.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /internal/v1/search:
+    get:
+      operationId: getSearch
+      summary: Ranked video search; returns video ids and scores only.
+      tags:
+        - search
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 20
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: tag
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: category
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: language
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: hide_sensitive
+          in: query
+          required: false
+          schema:
+            type: boolean
+        - name: mode
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - simple
+              - advanced
+      responses:
+        '200':
+          description: Ranked video ids.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResponse'
+        '401':
+          description: Missing or invalid internal authentication.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /internal/v1/recommendations/related:
+    get:
+      operationId: getRelatedRecommendations
+      summary: Related videos for a seed video.
+      tags:
+        - recommendations
+      parameters:
+        - name: video_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+        - name: hide_sensitive
+          in: query
+          required: false
+          schema:
+            type: boolean
+        - name: personalized
+          in: query
+          required: false
+          schema:
+            type: boolean
+        - name: user_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: session_id
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Related recommendations.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecommendationsResponse'
+        '401':
+          description: Missing or invalid internal authentication.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Invalid parameters.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /internal/v1/recommendations/home:
+    get:
+      operationId: getHomeRecommendations
+      summary: Home feed (trending / fresh / popular mix).
+      tags:
+        - recommendations
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: hide_sensitive
+          in: query
+          required: false
+          schema:
+            type: boolean
+        - name: personalized
+          in: query
+          required: false
+          schema:
+            type: boolean
+        - name: user_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: session_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: lang
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Home recommendations.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecommendationsResponse'
+        '401':
+          description: Missing or invalid internal authentication.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /internal/v1/events:
+    post:
+      operationId: postEvents
+      summary: Ingest a batch of domain and behavioral events (<=500).
+      tags:
+        - events
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EventsRequest'
+      responses:
+        '200':
+          description: Batch outcome.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventsResponse'
+        '401':
+          description: Missing or invalid internal authentication.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Invalid batch.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  securitySchemes:
+    InternalAuth:
+      type: apiKey
+      in: header
+      name: X-Vidra-Internal-Auth
+      description: >-
+        HMAC-SHA256 capability header: v1:{unix_ts}:{hex(hmac_sha256(secret,
+        ts+"\n"+METHOD+"\n"+PATH))}, verified within a ±120s window.
+  schemas:
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: object
+          required:
+            - code
+            - message
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            request_id:
+              type: string
+            fields:
+              type: array
+              items:
+                type: object
+                properties:
+                  field:
+                    type: string
+                  message:
+                    type: string
+    Suggestion:
+      type: object
+      required:
+        - text
+        - type
+        - is_personal
+      properties:
+        text:
+          type: string
+        type:
+          type: string
+          enum:
+            - query
+            - video
+            - channel
+            - tag
+            - history
+        video_id:
+          type: string
+          format: uuid
+        channel_handle:
+          type: string
+        is_personal:
+          type: boolean
+    SuggestionsResponse:
+      type: object
+      required:
+        - query
+        - normalized_query
+        - suggestions
+        - model_version
+      properties:
+        query:
+          type: string
+        normalized_query:
+          type: string
+        suggestions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Suggestion'
+        model_version:
+          type: string
+    SearchHit:
+      type: object
+      required:
+        - video_id
+        - score
+      properties:
+        video_id:
+          type: string
+          format: uuid
+        score:
+          type: number
+          format: double
+    SearchResponse:
+      type: object
+      required:
+        - query
+        - ids
+        - model_version
+      properties:
+        query:
+          type: string
+        ids:
+          type: array
+          items:
+            $ref: '#/components/schemas/SearchHit'
+        model_version:
+          type: string
+    RecommendationItem:
+      type: object
+      required:
+        - video_id
+        - score
+        - reason
+      properties:
+        video_id:
+          type: string
+          format: uuid
+        score:
+          type: number
+          format: double
+        reason:
+          type: string
+          enum:
+            - subscribed
+            - trending
+            - co_watch
+            - similar
+            - fresh
+            - popular
+    RecommendationsResponse:
+      type: object
+      required:
+        - items
+        - model_version
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecommendationItem'
+        model_version:
+          type: string
+    EventEnvelope:
+      type: object
+      required:
+        - event_id
+        - type
+        - occurred_at
+        - schema_version
+        - payload
+      properties:
+        event_id:
+          type: string
+          format: uuid
+        type:
+          type: string
+        occurred_at:
+          type: string
+          format: date-time
+        schema_version:
+          type: integer
+        payload:
+          type: object
+          additionalProperties: true
+    EventsRequest:
+      type: object
+      required:
+        - events
+      properties:
+        events:
+          type: array
+          maxItems: 500
+          items:
+            $ref: '#/components/schemas/EventEnvelope'
+    EventFailure:
+      type: object
+      required:
+        - event_id
+        - code
+        - message
+      properties:
+        event_id:
+          type: string
+        code:
+          type: string
+        message:
+          type: string
+    EventsResponse:
+      type: object
+      required:
+        - accepted
+        - duplicates
+      properties:
+        accepted:
+          type: integer
+        duplicates:
+          type: integer
+        failed:
+          type: array
+          items:
+            $ref: '#/components/schemas/EventFailure'
