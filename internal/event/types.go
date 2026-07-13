@@ -1,8 +1,10 @@
 // Package event ingests the domain and behavioral events vidra-core delivers to
 // POST /internal/v1/events and applies their side effects to the search corpus.
 // Every event is deduped through the events_inbox ledger (idempotent intake);
-// domain events mutate documents/config synchronously in a transaction, while
-// behavioral events are counted and dropped in W1 (persisted in W2).
+// domain events mutate documents/config synchronously in a transaction, and
+// behavioral events are persisted to behavior_events (plus query_log, personal
+// history/projections under the allow_history rule) with ephemeral session +
+// trending side effects flushed to Redis after the commit.
 package event
 
 import (
@@ -28,7 +30,8 @@ type Failure struct {
 	Message string `json:"message"`
 }
 
-// Result is the batch outcome returned to vidra-core.
+// Result is the batch outcome returned to vidra-core. Failed is always a
+// (possibly empty) array, never null, so core's contract can rely on the shape.
 type Result struct {
 	Accepted   int       `json:"accepted"`
 	Duplicates int       `json:"duplicates"`
@@ -49,14 +52,21 @@ const (
 	TypeReconcilePage  = "reconcile.page"
 	TypeReconcileEnd   = "reconcile.end"
 
-	// Behavioral types (W1: counted + dropped; W2 persists them).
+	// Behavioral types (persisted to behavior_events in W2).
 	TypeSearchSubmitted     = "search.submitted"
 	TypeSearchSuggShown     = "search.suggestions_shown"
 	TypeSearchSuggSelected  = "search.suggestion_selected"
 	TypeSearchResultClicked = "search.result_clicked"
+	TypeVideoImpression     = "video.impression"
 	TypeVideoPlayStarted    = "video.play_started"
 	TypeVideoWatchProgress  = "video.watch_progress"
 	TypeVideoCompleted      = "video.completed"
+
+	// Derived behavioral types synthesized by the W2 workers (never delivered by
+	// core, but named here so metric labels and the fold queries agree).
+	TypeVideoMeaningfulWatch = "video.meaningful_watch"
+	TypeSearchReformulated   = "search.reformulated"
+	TypeSearchAbandoned      = "search.abandoned"
 )
 
 // knownTypes bounds the metric `type` label to a fixed set (unknown → "unknown").
@@ -66,8 +76,9 @@ var knownTypes = map[string]bool{
 	TypeUserHistoryDel: true, TypeConfigUpdated: true,
 	TypeReconcileBegin: true, TypeReconcilePage: true, TypeReconcileEnd: true,
 	TypeSearchSubmitted: true, TypeSearchSuggShown: true, TypeSearchSuggSelected: true,
-	TypeSearchResultClicked: true, TypeVideoPlayStarted: true,
+	TypeSearchResultClicked: true, TypeVideoImpression: true, TypeVideoPlayStarted: true,
 	TypeVideoWatchProgress: true, TypeVideoCompleted: true,
+	TypeVideoMeaningfulWatch: true, TypeSearchReformulated: true, TypeSearchAbandoned: true,
 }
 
 // metricType maps an event type to a bounded metric label.
@@ -78,12 +89,13 @@ func metricType(t string) string {
 	return "unknown"
 }
 
-// isBehavioral reports whether a type is a behavioral (analytics) event.
+// isBehavioral reports whether a type is a behavioral (analytics) event that is
+// recorded to behavior_events.
 func isBehavioral(t string) bool {
 	switch t {
 	case TypeSearchSubmitted, TypeSearchSuggShown, TypeSearchSuggSelected,
-		TypeSearchResultClicked, TypeVideoPlayStarted, TypeVideoWatchProgress,
-		TypeVideoCompleted:
+		TypeSearchResultClicked, TypeVideoImpression, TypeVideoPlayStarted,
+		TypeVideoWatchProgress, TypeVideoCompleted:
 		return true
 	}
 	return false
@@ -162,4 +174,72 @@ type reconcilePagePayload struct {
 type reconcileEndPayload struct {
 	RunID uuid.UUID `json:"run_id"`
 	Total int       `json:"total"`
+}
+
+type userHistoryDeletedPayload struct {
+	UserID uuid.UUID `json:"user_id"`
+	Scope  string    `json:"scope"` // watch | search | all
+}
+
+// --- behavioral payloads (schema_version 1) ---
+//
+// allow_history gates the DURABLE personal projections (user_search_history,
+// user_watch_projection) only — the raw query_log/behavior_events ledgers,
+// ephemeral session context, and global trending are populated regardless (§1.5).
+
+type searchSubmittedPayload struct {
+	Query        string     `json:"query"`
+	UserID       *uuid.UUID `json:"user_id"`
+	SessionID    *string    `json:"session_id"`
+	ResultsCount *int32     `json:"results_count"`
+	Source       string     `json:"source"`
+	AllowHistory bool       `json:"allow_history"`
+}
+
+type resultClickedPayload struct {
+	Query        string     `json:"query"`
+	VideoID      uuid.UUID  `json:"video_id"`
+	Position     *int32     `json:"position"`
+	UserID       *uuid.UUID `json:"user_id"`
+	SessionID    *string    `json:"session_id"`
+	ModelVersion *string    `json:"model_version"`
+}
+
+type impressionPayload struct {
+	VideoID      uuid.UUID  `json:"video_id"`
+	Query        *string    `json:"query"`
+	Position     *int32     `json:"position"`
+	UserID       *uuid.UUID `json:"user_id"`
+	SessionID    *string    `json:"session_id"`
+	ModelVersion *string    `json:"model_version"`
+}
+
+type playStartedPayload struct {
+	VideoID      uuid.UUID  `json:"video_id"`
+	UserID       *uuid.UUID `json:"user_id"`
+	SessionID    *string    `json:"session_id"`
+	Context      string     `json:"context"`
+	Query        *string    `json:"query"`
+	AllowHistory bool       `json:"allow_history"`
+}
+
+type watchProgressPayload struct {
+	VideoID   uuid.UUID  `json:"video_id"`
+	UserID    *uuid.UUID `json:"user_id"`
+	SessionID *string    `json:"session_id"`
+}
+
+type videoCompletedPayload struct {
+	VideoID      uuid.UUID  `json:"video_id"`
+	UserID       *uuid.UUID `json:"user_id"`
+	SessionID    *string    `json:"session_id"`
+	AllowHistory bool       `json:"allow_history"`
+}
+
+// suggestionEventPayload covers search.suggestions_shown / suggestion_selected —
+// recorded as-is for funnel analysis (position present only on selection).
+type suggestionEventPayload struct {
+	UserID    *uuid.UUID `json:"user_id"`
+	SessionID *string    `json:"session_id"`
+	Position  *int32     `json:"position"`
 }
