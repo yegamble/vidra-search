@@ -25,6 +25,20 @@ type SearchBehaviorEvent struct {
 	Props           []byte      `json:"props"`
 }
 
+type SearchCoSearch struct {
+	VideoA    uuid.UUID `json:"video_a"`
+	VideoB    uuid.UUID `json:"video_b"`
+	Count     int64     `json:"count"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type SearchCoWatch struct {
+	VideoA    uuid.UUID `json:"video_a"`
+	VideoB    uuid.UUID `json:"video_b"`
+	Count     int64     `json:"count"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 type SearchDocument struct {
 	VideoID          uuid.UUID          `json:"video_id"`
 	Kind             string             `json:"kind"`
@@ -54,6 +68,35 @@ type SearchEventsInbox struct {
 	EventID    uuid.UUID `json:"event_id"`
 	Type       string    `json:"type"`
 	ReceivedAt time.Time `json:"received_at"`
+}
+
+type SearchExperiment struct {
+	Key         string    `json:"key"`
+	Description string    `json:"description"`
+	Variants    []byte    `json:"variants"`
+	Salt        string    `json:"salt"`
+	Enabled     bool      `json:"enabled"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+type SearchItemNeighbor struct {
+	VideoID      uuid.UUID `json:"video_id"`
+	NeighborID   uuid.UUID `json:"neighbor_id"`
+	Score        float32   `json:"score"`
+	Source       string    `json:"source"`
+	ModelVersion string    `json:"model_version"`
+}
+
+type SearchModel struct {
+	ID             int64              `json:"id"`
+	Kind           string             `json:"kind"`
+	Version        string             `json:"version"`
+	Status         string             `json:"status"`
+	ArtifactSha256 *string            `json:"artifact_sha256"`
+	ArtifactPath   *string            `json:"artifact_path"`
+	Metrics        []byte             `json:"metrics"`
+	TrainedAt      time.Time          `json:"trained_at"`
+	ActivatedAt    pgtype.Timestamptz `json:"activated_at"`
 }
 
 type SearchQueryAggregate struct {

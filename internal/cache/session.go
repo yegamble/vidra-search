@@ -60,3 +60,17 @@ func (c *Cache) SessionQueries(ctx context.Context, sessionID string) []string {
 	}
 	return vals
 }
+
+// SessionVideos returns the session's recent video ids (sess:v), newest first —
+// the session-intent signal for advanced ranking and the session-based candidate
+// seed for advanced recommendations. Best-effort: a Redis error yields nil.
+func (c *Cache) SessionVideos(ctx context.Context, sessionID string) []string {
+	if sessionID == "" {
+		return nil
+	}
+	vals, err := c.Client.LRange(ctx, sessionVideoKey(sessionID), 0, sessionMax-1).Result()
+	if err != nil && err != redis.Nil {
+		return nil
+	}
+	return vals
+}

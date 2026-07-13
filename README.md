@@ -101,6 +101,12 @@ The standalone compose deliberately avoids the main stack's ports
 | `SEARCH_TRENDING_WILSON_FLOOR` | `0.10` | Wilson lower-bound min-volume gate for trending. |
 | `SEARCH_WORKERS_ENABLED` | `true` | Run the background rollup/sweeper/retention loops. |
 | `SEARCH_{AGGREGATES,ENGAGEMENT,SESSIONIZER,TRENDING,RETENTION,RECONCILE_GUARD}_INTERVAL` | `1m/5m/5m/1m/24h/10m` | Worker cadences. |
+| `MODEL_DIR` | `/var/lib/vidra-search/models` | Directory holding learned ranker artifacts. |
+| `SEARCH_COVIS_INTERVAL` | `15m` | Co-visitation rollup cadence. |
+| `SEARCH_COVIS_{WINDOW_SECONDS,LAMBDA,TOP_M}` | `3600/10/100` | Co-visitation window, shrinkage λ, neighbors per item. |
+| `SEARCH_MODEL_LOADER_INTERVAL` | `1m` | Active-ranker hot-swap check cadence. |
+| `SEARCH_SHADOW_EVAL_INTERVAL` / `SEARCH_SHADOW_EVAL_DAYS` | `1h` / `14` | Shadow-eval cadence and impression look-back. |
+| `SEARCH_RUN_JOB` | `""` | Run one named worker job once and exit (e.g. `shadow_eval`, `covis_rollup`). |
 
 Policy knobs (`MIN_QUERY_USER_COUNT`, retention, half-life, …) are boot-time
 fallbacks; vidra-core overrides them at runtime via the `search.config_updated`
@@ -118,6 +124,12 @@ event.
 | `make openapi-lint` / `openapi-verify` | Redocly lint / route-vs-spec drift guard. |
 | `make run` / `build` | Run / build the api binary. |
 | `make seed-loadtest` / `loadtest` | Seed a synthetic corpus / drive suggestions (p50/p95/p99). |
+| `make shadow-eval` / `covis-rollup` | Run a single model shadow-eval / co-visitation rollup pass. |
+| `make activate-model VERSION=…` | Promote a shadow ranker to active (retires the previous). |
+
+Offline model training lives in [`training/`](training/README.md) (Python; Go
+never trains). See [`docs/evaluation.md`](docs/evaluation.md) for the shadow →
+activate runbook and label/metric definitions.
 
 ## Documentation
 

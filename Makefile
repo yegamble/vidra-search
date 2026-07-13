@@ -107,6 +107,23 @@ up: ## Start the local standalone Docker stack (postgres, redis, migrate, api)
 down: ## Stop the local Docker stack
 	docker compose down
 
+.PHONY: shadow-eval
+shadow-eval: ## Run one shadow-evaluation pass over shadow ranker models and exit
+	SEARCH_RUN_JOB=shadow_eval SEARCH_WORKERS_ENABLED=false go run ./cmd/api
+
+.PHONY: covis-rollup
+covis-rollup: ## Run one co-visitation rollup pass and exit
+	SEARCH_RUN_JOB=covis_rollup SEARCH_WORKERS_ENABLED=false go run ./cmd/api
+
+.PHONY: activate-model
+activate-model: ## Promote a shadow ranker to active (retires the previous); requires VERSION=ranker-...
+	@test -n "$(VERSION)" || { echo "usage: make activate-model VERSION=ranker-YYYYmmddHHMMSS"; exit 1; }
+	psql "$(DATABASE_URL)" -v ON_ERROR_STOP=1 -c "BEGIN; \
+		UPDATE search.models SET status='retired' WHERE kind='ranker' AND status='active'; \
+		UPDATE search.models SET status='active', activated_at=now() WHERE kind='ranker' AND version='$(VERSION)'; \
+		COMMIT;"
+	@echo "activated ranker $(VERSION); model_loader will hot-swap within its interval."
+
 .PHONY: seed-loadtest
 seed-loadtest: ## Seed N synthetic documents for the load test (N via COUNT, default 100000)
 	go run ./scripts/loadtest -mode=seed -n=$${COUNT:-100000}

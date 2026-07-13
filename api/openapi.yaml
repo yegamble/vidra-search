@@ -153,6 +153,25 @@ paths:
             enum:
               - simple
               - advanced
+        - name: user_id
+          in: query
+          required: false
+          description: Signed-in user id; enables personalization in advanced mode.
+          schema:
+            type: string
+            format: uuid
+        - name: session_id
+          in: query
+          required: false
+          description: Session id; enables session-intent + anonymous experiment bucketing.
+          schema:
+            type: string
+        - name: personalized
+          in: query
+          required: false
+          description: When true (and user_id present), advanced ranking applies personalization.
+          schema:
+            type: boolean
       responses:
         '200':
           description: Ranked video ids.
@@ -538,6 +557,22 @@ components:
         score:
           type: number
           format: double
+    Experiment:
+      type: object
+      description: The experiment variant the request was bucketed into (advanced mode).
+      required:
+        - experiment
+        - variant
+        - bucket
+      properties:
+        experiment:
+          type: string
+        variant:
+          type: string
+        bucket:
+          type: integer
+        model_version:
+          type: string
     SearchResponse:
       type: object
       required:
@@ -553,6 +588,8 @@ components:
             $ref: '#/components/schemas/SearchHit'
         model_version:
           type: string
+        experiment:
+          $ref: '#/components/schemas/Experiment'
     RecommendationItem:
       type: object
       required:
@@ -587,6 +624,8 @@ components:
             $ref: '#/components/schemas/RecommendationItem'
         model_version:
           type: string
+        experiment:
+          $ref: '#/components/schemas/Experiment'
     EventEnvelope:
       type: object
       required:

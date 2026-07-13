@@ -74,13 +74,33 @@ type Config struct {
 
 	// WorkersEnabled gates the background rollup loops.
 	WorkersEnabled bool
+	// RunJob, when set, runs a single named worker job once and exits (used by
+	// `make shadow-eval` and one-shot ops). Empty runs the HTTP server normally.
+	RunJob string
 	// Worker cadences (§1.9).
 	AggregatesInterval     time.Duration
 	EngagementInterval     time.Duration
 	SessionizerInterval    time.Duration
 	TrendingInterval       time.Duration
+	CovisInterval          time.Duration
 	RetentionInterval      time.Duration
 	ReconcileGuardInterval time.Duration
+
+	// Co-visitation tuning (§1.9). Window bounds the in-session gap for a pair;
+	// lambda is the cosine shrinkage; top-M is neighbors kept per item.
+	CovisWindowSeconds float64
+	CovisLambda        float64
+	CovisTopM          int
+
+	// ModelDir is where the model registry keeps artifacts (ranker LightGBM text
+	// files). The model_loader + shadow-eval workers read/verify artifacts here.
+	ModelDir string
+
+	// ModelLoaderInterval / ShadowEvalInterval are the model worker cadences.
+	ModelLoaderInterval time.Duration
+	ShadowEvalInterval  time.Duration
+	// ShadowEvalDays is the look-back window of logged impressions replayed.
+	ShadowEvalDays int
 }
 
 // Load reads configuration from the environment, applying safe development
@@ -105,12 +125,17 @@ func Load() (*Config, error) {
 
 		TrendCapWindow:         getEnvDuration("SEARCH_TREND_CAP_WINDOW", time.Hour),
 		WorkersEnabled:         getEnvBool("SEARCH_WORKERS_ENABLED", true),
+		RunJob:                 getEnv("SEARCH_RUN_JOB", ""),
 		AggregatesInterval:     getEnvDuration("SEARCH_AGGREGATES_INTERVAL", time.Minute),
 		EngagementInterval:     getEnvDuration("SEARCH_ENGAGEMENT_INTERVAL", 5*time.Minute),
 		SessionizerInterval:    getEnvDuration("SEARCH_SESSIONIZER_INTERVAL", 5*time.Minute),
 		TrendingInterval:       getEnvDuration("SEARCH_TRENDING_INTERVAL", time.Minute),
+		CovisInterval:          getEnvDuration("SEARCH_COVIS_INTERVAL", 15*time.Minute),
 		RetentionInterval:      getEnvDuration("SEARCH_RETENTION_INTERVAL", 24*time.Hour),
 		ReconcileGuardInterval: getEnvDuration("SEARCH_RECONCILE_GUARD_INTERVAL", 10*time.Minute),
+		ModelDir:               getEnv("MODEL_DIR", "/var/lib/vidra-search/models"),
+		ModelLoaderInterval:    getEnvDuration("SEARCH_MODEL_LOADER_INTERVAL", time.Minute),
+		ShadowEvalInterval:     getEnvDuration("SEARCH_SHADOW_EVAL_INTERVAL", time.Hour),
 	}
 
 	port, err := getEnvInt("HTTP_PORT", 8080)
@@ -141,6 +166,18 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if cfg.TrendingWilsonFloor, err = getEnvFloat("SEARCH_TRENDING_WILSON_FLOOR", 0.10); err != nil {
+		return nil, err
+	}
+	if cfg.CovisWindowSeconds, err = getEnvFloat("SEARCH_COVIS_WINDOW_SECONDS", 3600); err != nil {
+		return nil, err
+	}
+	if cfg.CovisLambda, err = getEnvFloat("SEARCH_COVIS_LAMBDA", 10); err != nil {
+		return nil, err
+	}
+	if cfg.CovisTopM, err = getEnvInt("SEARCH_COVIS_TOP_M", 100); err != nil {
+		return nil, err
+	}
+	if cfg.ShadowEvalDays, err = getEnvInt("SEARCH_SHADOW_EVAL_DAYS", 14); err != nil {
 		return nil, err
 	}
 
@@ -207,6 +244,18 @@ func (c *Config) validate() error {
 	}
 	if c.TrendCapWindow <= 0 {
 		return fmt.Errorf("config: SEARCH_TREND_CAP_WINDOW must be positive")
+	}
+	if c.CovisWindowSeconds <= 0 {
+		return fmt.Errorf("config: SEARCH_COVIS_WINDOW_SECONDS must be positive")
+	}
+	if c.CovisLambda < 0 {
+		return fmt.Errorf("config: SEARCH_COVIS_LAMBDA must be >= 0")
+	}
+	if c.CovisTopM < 1 {
+		return fmt.Errorf("config: SEARCH_COVIS_TOP_M must be >= 1")
+	}
+	if c.ShadowEvalDays < 1 {
+		return fmt.Errorf("config: SEARCH_SHADOW_EVAL_DAYS must be >= 1")
 	}
 	if c.Environment == "production" {
 		if c.InternalSecret == devInternalSecret {

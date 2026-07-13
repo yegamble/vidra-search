@@ -60,6 +60,30 @@ are idempotent.
 - `reconcile_guard` (10m) — warns + sets the reconcile-age gauge when no
   `reconcile.end` has arrived within `~48h`.
 
+W3 adds four more loops (wired as generic periodic jobs; also runnable one-shot
+via `SEARCH_RUN_JOB=<name>`):
+
+- `covis_rollup` (15m, cursor-based) — folds sessionized co-watch/co-search pairs
+  into the cumulative counters and rebuilds the `item_neighbors` shrunk-cosine
+  index (λ=`SEARCH_COVIS_LAMBDA`=10, top-M=`SEARCH_COVIS_TOP_M`=100, window
+  `SEARCH_COVIS_WINDOW_SECONDS`=3600).
+- `model_loader` (1m) — hot-swaps the active learned ranker (checksum-verified)
+  behind an atomic pointer; a bad artifact keeps the previous model/heuristic.
+- `shadow_eval` (1h) — scores shadow rankers over recent impressions
+  (`SEARCH_SHADOW_EVAL_DAYS`=14 look-back); writes `models.metrics` + gauges.
+- `experiment_refresh` (5m) — reloads enabled experiment definitions into RAM.
+
+W3 metrics:
+
+- `vidra_search_loaded_model{kind,version}` — the currently-served model (value 1
+  on the active version label); `kind=ranker version=heuristic-v1` means no learned
+  model is loaded.
+- `vidra_search_model_load_errors_total` — learned-artifact load failures. Any
+  increase means an active model is missing/corrupt/malformed and the service is
+  falling back — investigate the artifact + its `models` row.
+- `vidra_search_shadow_eval{version,metric}` — shadow NDCG@10 / MRR@10 and the
+  `vs_production` / `vs_heuristic` deltas per shadow model version.
+
 Trending gates (before exposure): a distinct-user floor (HLL) `≥
 MIN_QUERY_USER_COUNT`, a Wilson lower-bound min-volume gate
 (`SEARCH_TRENDING_WILSON_FLOOR`, default 0.10), and a per-user contribution cap
@@ -103,6 +127,47 @@ individual event are eventually reconciled.
   `vidra_search_reconcile_age_seconds` and logs a warning past ~48h; also watch
   the `vidra_search_documents` gauge against the expected catalog size.
 
+## Model registry & rollback (W3)
+
+Learned rankers are trained offline (`training/`), registered as
+`status='shadow'`, shadow-evaluated, then **manually** activated. See
+`docs/evaluation.md` for the full shadow → activate runbook. Serving never depends
+on a learned model: the heuristic ranker is always available, and any
+load/checksum failure falls back to it (`vidra_search_model_load_errors_total`).
+
+- **Activate a shadow model** (retires the previous active ranker; the
+  `model_loader` worker hot-swaps within ~1m):
+  ```bash
+  make activate-model VERSION=ranker-20260713120000
+  ```
+- **Roll back to the previous version** — re-activate it (this retires the current
+  one). If you know the previous version:
+  ```bash
+  make activate-model VERSION=ranker-20260701090000
+  ```
+  Or by hand:
+  ```sql
+  BEGIN;
+  UPDATE search.models SET status='retired' WHERE kind='ranker' AND status='active';
+  UPDATE search.models SET status='active', activated_at=now()
+    WHERE kind='ranker' AND version='<previous-version>';
+  COMMIT;
+  ```
+- **Emergency: disable the learned ranker entirely** — retire the active row; with
+  no active ranker the loader reverts to the heuristic on its next pass:
+  ```sql
+  UPDATE search.models SET status='retired' WHERE kind='ranker' AND status='active';
+  ```
+- **Remove a bad artifact** — after retiring its row, delete
+  `${MODEL_DIR}/ranker-<version>.txt`. A corrupt/missing artifact for an active
+  model is already non-fatal (the loader keeps the previous model + logs +
+  increments the load-error metric, and does not modify the `models` row).
+
+Confirm the served model with `vidra_search_loaded_model{kind="ranker"}` or:
+```sql
+SELECT version, status, activated_at FROM search.models WHERE kind='ranker' ORDER BY id DESC;
+```
+
 ## Common tasks
 
 - **Apply migrations**: `make migrate-up` (uses
@@ -110,3 +175,6 @@ individual event are eventually reconciled.
 - **Regenerate typed queries** after a SQL change: `make sqlc` then commit
   `internal/store/sqlcgen`; `make sqlc-verify` guards drift in CI.
 - **Reseed a load-test corpus**: `COUNT=100000 make seed-loadtest`.
+- **Run a rollup once** (debug): `SEARCH_RUN_JOB=covis_rollup make covis-rollup`,
+  or `make shadow-eval`.
+- **Train a shadow ranker**: see `training/README.md` and `docs/evaluation.md`.
