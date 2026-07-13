@@ -1,0 +1,26 @@
+[project]
+name = "vidra-search-training"
+version = "0.1.0"
+description = "Offline model training for vidra-search (LambdaMART ranker; iALS neighbors as future work)."
+requires-python = ">=3.9"
+dependencies = [
+    "lightgbm>=4.0",
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "psycopg[binary]>=3.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["train_ranker"]
+
+[tool.pytest.ini_options]
+addopts = "-q"

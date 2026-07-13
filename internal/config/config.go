@@ -74,6 +74,9 @@ type Config struct {
 
 	// WorkersEnabled gates the background rollup loops.
 	WorkersEnabled bool
+	// RunJob, when set, runs a single named worker job once and exits (used by
+	// `make shadow-eval` and one-shot ops). Empty runs the HTTP server normally.
+	RunJob string
 	// Worker cadences (§1.9).
 	AggregatesInterval     time.Duration
 	EngagementInterval     time.Duration
@@ -122,6 +125,7 @@ func Load() (*Config, error) {
 
 		TrendCapWindow:         getEnvDuration("SEARCH_TREND_CAP_WINDOW", time.Hour),
 		WorkersEnabled:         getEnvBool("SEARCH_WORKERS_ENABLED", true),
+		RunJob:                 getEnv("SEARCH_RUN_JOB", ""),
 		AggregatesInterval:     getEnvDuration("SEARCH_AGGREGATES_INTERVAL", time.Minute),
 		EngagementInterval:     getEnvDuration("SEARCH_ENGAGEMENT_INTERVAL", 5*time.Minute),
 		SessionizerInterval:    getEnvDuration("SEARCH_SESSIONIZER_INTERVAL", 5*time.Minute),

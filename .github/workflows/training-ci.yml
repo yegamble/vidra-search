@@ -1,0 +1,46 @@
+name: training-ci
+
+# Validates the offline training pipeline (training/) on SYNTHETIC data — no real
+# traffic and no database. It exercises dataset assembly → LightGBM lambdarank
+# training → artifact save/load and asserts the feature-vector order still matches
+# the Go server contract (internal/ranking.ModelFeatureNames). Kept separate from
+# the Go gates so `make ci` stays Python-free.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "training/**"
+      - ".github/workflows/training-ci.yml"
+  pull_request:
+    paths:
+      - "training/**"
+      - ".github/workflows/training-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: training
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install training deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+
+      - name: Run the training smoke test (synthetic data, no DB)
+        run: pytest -q
+
+      - name: Prove the CLI smoke path emits a leaves-loadable artifact
+        run: |
+          python train_ranker.py --smoke --smoke-out /tmp/ranker.txt
+          head -2 /tmp/ranker.txt | grep -q 'version=v3'

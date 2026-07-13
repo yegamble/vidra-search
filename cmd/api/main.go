@@ -117,11 +117,21 @@ func run() error {
 		History: history.NewService(st),
 	}
 
+	runner := worker.NewRunner(st, rdb, workerConfig(cfg), wm, logger)
+	runner.AddJob(worker.PeriodicJob{Name: "model_loader", Interval: cfg.ModelLoaderInterval, Run: loader.Refresh})
+	runner.AddJob(worker.PeriodicJob{Name: "experiment_refresh", Interval: 5 * time.Minute, Run: experiments.Refresh})
+	runner.AddJob(worker.PeriodicJob{Name: "shadow_eval", Interval: cfg.ShadowEvalInterval, Run: evaluator.Run})
+
+	// One-shot job mode (e.g. `make shadow-eval`): run the named job once and exit.
+	if cfg.RunJob != "" {
+		logger.Info("running one-shot job", "job", cfg.RunJob)
+		if err := runner.RunOnce(ctx, cfg.RunJob); err != nil {
+			return err
+		}
+		return nil
+	}
+
 	if cfg.WorkersEnabled {
-		runner := worker.NewRunner(st, rdb, workerConfig(cfg), wm, logger)
-		runner.AddJob(worker.PeriodicJob{Name: "model_loader", Interval: cfg.ModelLoaderInterval, Run: loader.Refresh})
-		runner.AddJob(worker.PeriodicJob{Name: "experiment_refresh", Interval: 5 * time.Minute, Run: experiments.Refresh})
-		runner.AddJob(worker.PeriodicJob{Name: "shadow_eval", Interval: cfg.ShadowEvalInterval, Run: evaluator.Run})
 		runner.Start(ctx)
 	}
 
