@@ -156,6 +156,15 @@ func (c Config) withDefaults() Config {
 	return c
 }
 
+// PeriodicJob is an externally-supplied ticker loop (model_loader, experiment
+// refresh, shadow_eval) run alongside the built-in rollups, so cmd/api can wire
+// jobs that depend on packages the worker does not import.
+type PeriodicJob struct {
+	Name     string
+	Interval time.Duration
+	Run      func(context.Context) error
+}
+
 // Runner owns the store, cache, config, and telemetry the loops share.
 type Runner struct {
 	store   *store.Store
@@ -163,6 +172,16 @@ type Runner struct {
 	cfg     Config
 	metrics Metrics
 	logger  *slog.Logger
+	extra   []PeriodicJob
+}
+
+// AddJob registers an external periodic job. Call before Start. The job is also
+// reachable via RunOnce(name) for deterministic test drives.
+func (r *Runner) AddJob(j PeriodicJob) {
+	if j.Interval <= 0 {
+		j.Interval = time.Minute
+	}
+	r.extra = append(r.extra, j)
 }
 
 // NewRunner builds a Runner. cache/metrics may be nil (trending-dependent work is
@@ -185,6 +204,9 @@ func (r *Runner) Start(ctx context.Context) {
 	go r.runLoop(ctx, "reconcile_guard", r.cfg.ReconcileGuardInterval, r.reconcileGuard)
 	if r.cache != nil {
 		go r.runLoop(ctx, "trending_sweeper", r.cfg.TrendingInterval, r.trendingSweeper)
+	}
+	for _, j := range r.extra {
+		go r.runLoop(ctx, j.Name, j.Interval, j.Run)
 	}
 	r.logger.Info("search workers started")
 }
@@ -220,6 +242,11 @@ func (r *Runner) RunOnce(ctx context.Context, name string) error {
 		return r.retention(ctx)
 	case "reconcile_guard":
 		return r.reconcileGuard(ctx)
+	}
+	for _, j := range r.extra {
+		if j.Name == name {
+			return j.Run(ctx)
+		}
 	}
 	return errors.New("worker: unknown job " + name)
 }

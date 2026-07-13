@@ -7,18 +7,28 @@ package recommendation
 import (
 	"context"
 	"errors"
+	"log/slog"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/vidra/vidra-search/internal/experiment"
 	"github.com/vidra/vidra-search/internal/pgconv"
+	"github.com/vidra/vidra-search/internal/ranking"
 	"github.com/vidra/vidra-search/internal/store/sqlcgen"
 	"github.com/vidra/vidra-search/internal/trending"
 )
 
 // ModelVersion identifies the W1 simple recommender.
 const ModelVersion = "simple-v1"
+
+// AdvancedModelVersion identifies the W3 advanced (two-stage) recommender.
+const AdvancedModelVersion = "advanced-v1"
+
+// ExperimentKey routes recommendations to an experiment variant (for labelling;
+// the recommender scoring is heuristic in v1).
+const ExperimentKey = "rec_ranker"
 
 const (
 	defaultLimit    = 20
@@ -30,12 +40,14 @@ const (
 	sameChannelCap = 2
 )
 
-// Reason values (subset of the §1.4 enum used by simple mode).
+// Reason values (§1.4 enum).
 const (
-	ReasonSimilar  = "similar"
-	ReasonTrending = "trending"
-	ReasonFresh    = "fresh"
-	ReasonPopular  = "popular"
+	ReasonSubscribed = "subscribed"
+	ReasonSimilar    = "similar"
+	ReasonTrending   = "trending"
+	ReasonCoWatch    = "co_watch"
+	ReasonFresh      = "fresh"
+	ReasonPopular    = "popular"
 )
 
 // Querier is the store surface the recommenders read.
@@ -47,12 +59,38 @@ type Querier interface {
 	HomeTrending(ctx context.Context, arg sqlcgen.HomeTrendingParams) ([]sqlcgen.HomeTrendingRow, error)
 	HomeRecent(ctx context.Context, arg sqlcgen.HomeRecentParams) ([]sqlcgen.HomeRecentRow, error)
 	ListEligibleByIDs(ctx context.Context, arg sqlcgen.ListEligibleByIDsParams) ([]sqlcgen.ListEligibleByIDsRow, error)
+	// Advanced (§1.8).
+	NeighborsForVideo(ctx context.Context, arg sqlcgen.NeighborsForVideoParams) ([]sqlcgen.NeighborsForVideoRow, error)
+	NeighborsForSeeds(ctx context.Context, arg sqlcgen.NeighborsForSeedsParams) ([]sqlcgen.NeighborsForSeedsRow, error)
+	NeighborsForUserWatches(ctx context.Context, arg sqlcgen.NeighborsForUserWatchesParams) ([]sqlcgen.NeighborsForUserWatchesRow, error)
+	NeighborAffinity(ctx context.Context, arg sqlcgen.NeighborAffinityParams) ([]sqlcgen.NeighborAffinityRow, error)
+	UserChannelAffinity(ctx context.Context, userID uuid.UUID) ([]sqlcgen.UserChannelAffinityRow, error)
+	ListDocFeaturesByIDs(ctx context.Context, arg sqlcgen.ListDocFeaturesByIDsParams) ([]sqlcgen.ListDocFeaturesByIDsRow, error)
+	RecentlyWatchedVideos(ctx context.Context, arg sqlcgen.RecentlyWatchedVideosParams) ([]uuid.UUID, error)
+	FreshLowViewEligible(ctx context.Context, arg sqlcgen.FreshLowViewEligibleParams) ([]sqlcgen.FreshLowViewEligibleRow, error)
+	ListServiceConfig(ctx context.Context) ([]sqlcgen.SearchServiceConfig, error)
 }
 
 // TrendingReader supplies the gated Redis trending-video list for the home feed.
 // nil disables it (the feed then uses the SQL gravity trending path).
 type TrendingReader interface {
 	TrendingVideos(ctx context.Context) []trending.Scored
+}
+
+// Experimenter assigns a subject to an experiment variant (nil disables it).
+type Experimenter interface {
+	Assign(key, subject string) (experiment.Assignment, bool)
+}
+
+// RankerProvider is accepted for symmetry with search and future learned rec
+// models; the v1 recommender scoring is heuristic, so it is currently unused.
+type RankerProvider interface {
+	RankerFor(wantVersion string) (ranking.Ranker, string)
+}
+
+// SessionReader supplies the session's recent video ids (session co-watch seed).
+type SessionReader interface {
+	SessionVideos(ctx context.Context, sessionID string) []string
 }
 
 // Item is one recommended video with its provenance.
@@ -64,20 +102,64 @@ type Item struct {
 
 // Response is the recommendations payload (§1.4).
 type Response struct {
-	Items        []Item `json:"items"`
-	ModelVersion string `json:"model_version"`
+	Items        []Item                 `json:"items"`
+	ModelVersion string                 `json:"model_version"`
+	Experiment   *experiment.Assignment `json:"experiment,omitempty"`
+}
+
+// RelatedRequest is a parsed related-feed request.
+type RelatedRequest struct {
+	VideoID       uuid.UUID
+	Limit         int
+	HideSensitive bool
+	UserID        string
+	SessionID     string
+	Personalized  bool
+}
+
+// HomeRequest is a parsed home-feed request.
+type HomeRequest struct {
+	Limit         int
+	HideSensitive bool
+	Lang          string
+	UserID        string
+	SessionID     string
+	Personalized  bool
 }
 
 // Service composes related and home feeds.
 type Service struct {
-	q     Querier
-	trend TrendingReader
+	q       Querier
+	trend   TrendingReader
+	ranker  RankerProvider
+	exp     Experimenter
+	session SessionReader
+	logger  *slog.Logger
 }
 
-// NewService builds the recommendation service. trend may be nil (home then uses
-// the SQL gravity trending path).
-func NewService(q Querier, trend TrendingReader) *Service {
-	return &Service{q: q, trend: trend}
+// NewService builds the recommendation service. trend, ranker, exp, and session
+// may be nil (the feed degrades gracefully: SQL trending path, no experiment
+// label, no session co-watch seed).
+func NewService(q Querier, trend TrendingReader, ranker RankerProvider, exp Experimenter, session SessionReader, logger *slog.Logger) *Service {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &Service{q: q, trend: trend, ranker: ranker, exp: exp, session: session, logger: logger}
+}
+
+// advancedMode reports whether the instance search_mode is "advanced" (read from
+// service_config; default simple). A config-read error falls back to simple.
+func (s *Service) advancedMode(ctx context.Context) bool {
+	rows, err := s.q.ListServiceConfig(ctx)
+	if err != nil {
+		return false
+	}
+	for _, r := range rows {
+		if r.Key == "search_mode" {
+			return r.Value == "advanced"
+		}
+	}
+	return false
 }
 
 // candidate is an internal, pre-scored recommendation with its channel (for the
@@ -88,11 +170,30 @@ type candidate struct {
 	reason    string
 }
 
-// Related builds the related feed for a seed video (§1.8 simple): up to two
+// Related builds the related feed, dispatching to the advanced two-stage
+// recommender when the instance search_mode is advanced, else the simple
+// composition. Both return the same response shape.
+func (s *Service) Related(ctx context.Context, req RelatedRequest) (Response, error) {
+	if s.advancedMode(ctx) {
+		return s.relatedAdvanced(ctx, req)
+	}
+	return s.relatedSimple(ctx, req.VideoID, req.Limit, req.HideSensitive)
+}
+
+// Home builds the home feed, dispatching to the advanced recommender when the
+// instance search_mode is advanced, else the simple mix.
+func (s *Service) Home(ctx context.Context, req HomeRequest) (Response, error) {
+	if s.advancedMode(ctx) {
+		return s.homeAdvanced(ctx, req)
+	}
+	return s.homeSimple(ctx, req.Limit, req.HideSensitive, req.Lang)
+}
+
+// relatedSimple builds the related feed for a seed video (§1.8 simple): up to two
 // recent same-channel videos, then tag/category/language overlap, then a popular
 // fill. Excludes the seed; respects eligibility + hide_sensitive; caps each
 // channel. A missing seed yields an empty feed.
-func (s *Service) Related(ctx context.Context, videoID uuid.UUID, limit int, hideSensitive bool) (Response, error) {
+func (s *Service) relatedSimple(ctx context.Context, videoID uuid.UUID, limit int, hideSensitive bool) (Response, error) {
 	limit = clamp(limit, defaultLimit, maxRelatedLimit)
 	resp := Response{Items: []Item{}, ModelVersion: ModelVersion}
 
@@ -151,10 +252,10 @@ func (s *Service) Related(ctx context.Context, videoID uuid.UUID, limit int, hid
 	return resp, nil
 }
 
-// Home builds the home feed (§1.8 simple): a language-aware mix of HN-gravity
-// trending, fresh, and popular, interleaved so all three contribute, with a
-// per-channel cap.
-func (s *Service) Home(ctx context.Context, limit int, hideSensitive bool, lang string) (Response, error) {
+// homeSimple builds the home feed (§1.8 simple): a language-aware mix of
+// HN-gravity trending, fresh, and popular, interleaved so all three contribute,
+// with a per-channel cap.
+func (s *Service) homeSimple(ctx context.Context, limit int, hideSensitive bool, lang string) (Response, error) {
 	limit = clamp(limit, defaultLimit, maxHomeLimit)
 	resp := Response{Items: []Item{}, ModelVersion: ModelVersion}
 	language := optStr(lang)

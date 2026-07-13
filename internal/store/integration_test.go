@@ -24,7 +24,9 @@ import (
 
 	"github.com/vidra/vidra-search/internal/cache"
 	"github.com/vidra/vidra-search/internal/event"
+	"github.com/vidra/vidra-search/internal/experiment"
 	"github.com/vidra/vidra-search/internal/history"
+	"github.com/vidra/vidra-search/internal/model"
 	"github.com/vidra/vidra-search/internal/ranking"
 	"github.com/vidra/vidra-search/internal/recommendation"
 	"github.com/vidra/vidra-search/internal/search"
@@ -35,14 +37,18 @@ import (
 
 // testEnv bundles the live dependencies and services for a test.
 type testEnv struct {
-	store   *store.Store
-	cache   *cache.Cache
-	events  *event.Service
-	sugg    *suggest.Service
-	search  *search.Service
-	rec     *recommendation.Service
-	history *history.Service
-	worker  *worker.Runner
+	store       *store.Store
+	cache       *cache.Cache
+	events      *event.Service
+	sugg        *suggest.Service
+	search      *search.Service
+	rec         *recommendation.Service
+	history     *history.Service
+	worker      *worker.Runner
+	loader      *model.Loader
+	experiments *experiment.Registry
+	evaluator   *model.ShadowEvaluator
+	modelDir    string
 }
 
 func newTestEnv(t *testing.T) *testEnv {
@@ -70,7 +76,9 @@ func newTestEnv(t *testing.T) *testEnv {
 		search.documents, search.events_inbox, search.service_config,
 		search.query_log, search.query_aggregates, search.user_search_history,
 		search.user_watch_projection, search.behavior_events,
-		search.query_video_engagement, search.worker_cursors RESTART IDENTITY`); err != nil {
+		search.query_video_engagement, search.worker_cursors,
+		search.co_watch, search.co_search, search.item_neighbors,
+		search.models, search.experiments RESTART IDENTITY`); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 	if err := rdb.Client.FlushDB(ctx).Err(); err != nil {
@@ -82,15 +90,30 @@ func newTestEnv(t *testing.T) *testEnv {
 	// from one subject collapse to a single ranking contribution.
 	eventCfg := event.Config{TrendCapWindow: time.Hour, TrendingHalfLifeSeconds: 6 * 3600, WatchHalfLifeHours: 720}
 	workerCfg := worker.Config{MinQueryUserCount: 3, TrendCapWindow: time.Hour, WilsonFloor: 0.10}
+
+	modelDir := t.TempDir()
+	loader := model.NewLoader(modelDir, q, ranking.DefaultAdvancedWeights.CreatorPenalty, nil, nil)
+	experiments := experiment.NewRegistry(q, nil)
+	evaluator := model.NewShadowEvaluator(q, loader, nil, nil, 30)
+
+	runner := worker.NewRunner(st, rdb, workerCfg, nil, nil)
+	runner.AddJob(worker.PeriodicJob{Name: "model_loader", Run: loader.Refresh})
+	runner.AddJob(worker.PeriodicJob{Name: "experiment_refresh", Run: experiments.Refresh})
+	runner.AddJob(worker.PeriodicJob{Name: "shadow_eval", Run: evaluator.Run})
+
 	return &testEnv{
-		store:   st,
-		cache:   rdb,
-		events:  event.NewService(st, nil, nil, eventCfg, rdb),
-		sugg:    suggest.NewService(q, suggest.NewStoreAggregate(q), rdb, rdb, rdb, nil),
-		search:  search.NewService(q),
-		rec:     recommendation.NewService(q, rdb),
-		history: history.NewService(st),
-		worker:  worker.NewRunner(st, rdb, workerCfg, nil, nil),
+		store:       st,
+		cache:       rdb,
+		events:      event.NewService(st, nil, nil, eventCfg, rdb),
+		sugg:        suggest.NewService(q, suggest.NewStoreAggregate(q), rdb, rdb, rdb, nil),
+		search:      search.NewService(q, loader, experiments, rdb, nil),
+		rec:         recommendation.NewService(q, rdb, loader, experiments, rdb, nil),
+		history:     history.NewService(st),
+		worker:      runner,
+		loader:      loader,
+		experiments: experiments,
+		evaluator:   evaluator,
+		modelDir:    modelDir,
 	}
 }
 
@@ -317,7 +340,7 @@ func TestIntegrationRelatedAndHomeDeterminism(t *testing.T) {
 	popular := video("popular unrelated", func(v *event.VideoDoc) { v.Views = 100000 })
 	ingest(t, env, upsertEnvelope(t, seed), upsertEnvelope(t, sameCh), upsertEnvelope(t, overlap), upsertEnvelope(t, popular))
 
-	related, err := env.rec.Related(ctx, seed.ID, 10, false)
+	related, err := env.rec.Related(ctx, recommendation.RelatedRequest{VideoID: seed.ID, Limit: 10})
 	if err != nil {
 		t.Fatalf("related: %v", err)
 	}
@@ -328,19 +351,19 @@ func TestIntegrationRelatedAndHomeDeterminism(t *testing.T) {
 		t.Fatalf("expected related items")
 	}
 	// Determinism: identical inputs → identical output order.
-	related2, _ := env.rec.Related(ctx, seed.ID, 10, false)
+	related2, _ := env.rec.Related(ctx, recommendation.RelatedRequest{VideoID: seed.ID, Limit: 10})
 	if !sameItemOrder(related.Items, related2.Items) {
 		t.Errorf("related not deterministic")
 	}
 
-	home, err := env.rec.Home(ctx, 10, false, "en")
+	home, err := env.rec.Home(ctx, recommendation.HomeRequest{Limit: 10, Lang: "en"})
 	if err != nil {
 		t.Fatalf("home: %v", err)
 	}
 	if len(home.Items) == 0 {
 		t.Fatalf("expected home items")
 	}
-	home2, _ := env.rec.Home(ctx, 10, false, "en")
+	home2, _ := env.rec.Home(ctx, recommendation.HomeRequest{Limit: 10, Lang: "en"})
 	if !sameItemOrder(home.Items, home2.Items) {
 		t.Errorf("home not deterministic")
 	}

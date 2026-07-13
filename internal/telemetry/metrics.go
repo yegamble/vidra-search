@@ -27,6 +27,9 @@ type Metrics struct {
 	workerErrors       *prometheus.CounterVec
 	trendingRejections *prometheus.CounterVec
 	reconcileAge       prometheus.Gauge
+	modelLoadErrors    prometheus.Counter
+	loadedModel        *prometheus.GaugeVec
+	shadowEval         *prometheus.GaugeVec
 }
 
 // NewMetrics builds the instruments on a fresh private registry, together with
@@ -75,9 +78,22 @@ func NewMetrics() *Metrics {
 			Name: "vidra_search_reconcile_age_seconds",
 			Help: "Seconds since the last reconcile.end was received (-1 if none on record).",
 		}),
+		modelLoadErrors: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "vidra_search_model_load_errors_total",
+			Help: "Total learned-model artifact load failures (missing/corrupt/malformed); the service keeps the previous model or heuristic.",
+		}),
+		loadedModel: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "vidra_search_loaded_model",
+			Help: "The currently-served model per kind (value 1 on the active version label).",
+		}, []string{"kind", "version"}),
+		shadowEval: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "vidra_search_shadow_eval",
+			Help: "Shadow-evaluation metric per model version and metric name (ndcg@10, mrr@10, vs_production, vs_heuristic).",
+		}, []string{"version", "metric"}),
 	}
 	reg.MustRegister(m.requests, m.duration, m.events, m.suggest,
-		m.eventLag, m.rollupDuration, m.workerErrors, m.trendingRejections, m.reconcileAge)
+		m.eventLag, m.rollupDuration, m.workerErrors, m.trendingRejections, m.reconcileAge,
+		m.modelLoadErrors, m.loadedModel, m.shadowEval)
 	reg.MustRegister(
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
@@ -134,6 +150,23 @@ func (m *Metrics) IncTrendingRejection(domain, reason string) {
 // SetReconcileAge records the age of the last reconcile.end.
 func (m *Metrics) SetReconcileAge(seconds float64) {
 	m.reconcileAge.Set(seconds)
+}
+
+// IncModelLoadError counts one learned-model artifact load failure.
+func (m *Metrics) IncModelLoadError() {
+	m.modelLoadErrors.Inc()
+}
+
+// SetLoadedModel marks version as the served model for kind (resetting the gauge
+// so exactly one version label reads 1 per kind).
+func (m *Metrics) SetLoadedModel(kind, version string) {
+	m.loadedModel.DeletePartialMatch(prometheus.Labels{"kind": kind})
+	m.loadedModel.WithLabelValues(kind, version).Set(1)
+}
+
+// SetShadowMetric records one shadow-evaluation metric for a model version.
+func (m *Metrics) SetShadowMetric(version, metric string, value float64) {
+	m.shadowEval.WithLabelValues(version, metric).Set(value)
 }
 
 // TableDepth is one table's approximate row count.

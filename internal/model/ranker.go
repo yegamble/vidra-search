@@ -2,13 +2,10 @@ package model
 
 import "github.com/vidra/vidra-search/internal/ranking"
 
-// Ranker reranks a candidate set for advanced search/recommendations. There are
-// two implementations: the heuristic (always available) and the learned model
-// (used only when a valid artifact is loaded AND an experiment routes to it).
-type Ranker interface {
-	Rerank(docs []ranking.Doc) []ranking.Ranked
-	Version() string
-}
+// Ranker is the shared reranker contract (ranking.Ranker): the heuristic (always
+// available) and the learned model (used only when a valid artifact is loaded AND
+// an experiment routes to it) both implement it.
+type Ranker = ranking.Ranker
 
 // HeuristicVersion is the version string reported when the hand-tuned linear
 // ranker is used.

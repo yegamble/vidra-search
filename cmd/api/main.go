@@ -10,12 +10,16 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/vidra/vidra-search/internal/api"
 	"github.com/vidra/vidra-search/internal/cache"
 	"github.com/vidra/vidra-search/internal/config"
 	"github.com/vidra/vidra-search/internal/event"
+	"github.com/vidra/vidra-search/internal/experiment"
 	"github.com/vidra/vidra-search/internal/history"
+	"github.com/vidra/vidra-search/internal/model"
+	"github.com/vidra/vidra-search/internal/ranking"
 	"github.com/vidra/vidra-search/internal/recommendation"
 	"github.com/vidra/vidra-search/internal/search"
 	"github.com/vidra/vidra-search/internal/store"
@@ -76,9 +80,13 @@ func run() error {
 	// otherwise so the services' nil guards engage.
 	var em event.Metrics
 	var wm worker.Metrics
+	var mm model.Metrics
+	var sm model.ShadowMetrics
 	if metrics != nil {
 		em = metrics
 		wm = metrics
+		mm = metrics
+		sm = metrics
 	}
 
 	q := st.Queries()
@@ -87,16 +95,33 @@ func run() error {
 		TrendCapWindow:          cfg.TrendCapWindow,
 		WatchHalfLifeHours:      cfg.WatchHalfLifeHours,
 	}
+
+	// Model registry + serving (§1.9): load the active learned ranker if present,
+	// else serve the always-available heuristic.
+	loader := model.NewLoader(cfg.ModelDir, q, ranking.DefaultAdvancedWeights.CreatorPenalty, mm, logger)
+	if err := loader.Refresh(ctx); err != nil {
+		logger.Warn("model: initial load failed; serving heuristic", "error", err)
+	}
+	// Experiment definitions cached in RAM (§1.5).
+	experiments := experiment.NewRegistry(q, logger)
+	if err := experiments.Refresh(ctx); err != nil {
+		logger.Warn("experiment: initial refresh failed", "error", err)
+	}
+	evaluator := model.NewShadowEvaluator(q, loader, sm, logger, cfg.ShadowEvalDays)
+
 	svcs := api.Services{
 		Suggest: suggest.NewService(q, suggest.NewStoreAggregate(q), rdb, rdb, rdb, logger),
-		Search:  search.NewService(q),
-		Rec:     recommendation.NewService(q, rdb),
+		Search:  search.NewService(q, loader, experiments, rdb, logger),
+		Rec:     recommendation.NewService(q, rdb, loader, experiments, rdb, logger),
 		Events:  event.NewService(st, em, logger, eventCfg, rdb),
 		History: history.NewService(st),
 	}
 
 	if cfg.WorkersEnabled {
 		runner := worker.NewRunner(st, rdb, workerConfig(cfg), wm, logger)
+		runner.AddJob(worker.PeriodicJob{Name: "model_loader", Interval: cfg.ModelLoaderInterval, Run: loader.Refresh})
+		runner.AddJob(worker.PeriodicJob{Name: "experiment_refresh", Interval: 5 * time.Minute, Run: experiments.Refresh})
+		runner.AddJob(worker.PeriodicJob{Name: "shadow_eval", Interval: cfg.ShadowEvalInterval, Run: evaluator.Run})
 		runner.Start(ctx)
 	}
 

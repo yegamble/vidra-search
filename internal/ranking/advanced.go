@@ -143,6 +143,15 @@ func scoreWith(f Features, w AdvancedWeights) float64 {
 	return s
 }
 
+// Ranker reranks an advanced candidate set and reports the version that produced
+// the ordering. The heuristic and the learned model (internal/model) both satisfy
+// it, so the serving path is polymorphic over which ranker an experiment routes
+// to.
+type Ranker interface {
+	Rerank(docs []Doc) []Ranked
+	Version() string
+}
+
 // Scorer maps one doc's (already set-normalized) features to a score. The
 // heuristic uses scoreWith; the learned ranker (internal/model) uses a
 // leaves-loaded LightGBM model over ModelFeatureVector — both flow through

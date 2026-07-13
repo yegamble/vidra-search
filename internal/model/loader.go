@@ -73,7 +73,7 @@ func (l *Loader) Learned() (*Learned, string) {
 // routes to (wantVersion). When wantVersion names the currently-loaded learned
 // model it is served; otherwise the heuristic is returned. An empty wantVersion
 // always yields the heuristic. The returned string is the version to report/stamp.
-func (l *Loader) RankerFor(wantVersion string) (Ranker, string) {
+func (l *Loader) RankerFor(wantVersion string) (ranking.Ranker, string) {
 	if wantVersion != "" {
 		if learned, v := l.Learned(); learned != nil && v == wantVersion {
 			return learned, v
@@ -130,6 +130,17 @@ func (l *Loader) Refresh(ctx context.Context) error {
 		l.metrics.SetLoadedModel("ranker", m.Version)
 	}
 	return nil
+}
+
+// LoadModel loads a registry row's artifact as a Learned ranker (verifying its
+// SHA-256), using the loader's model dir + creator penalty. Used by shadow
+// evaluation to score a shadow model that is NOT the served (active) one.
+func (l *Loader) LoadModel(m sqlcgen.SearchModel) (*Learned, error) {
+	lm, err := LoadLeaves(l.artifactPath(m), deref(m.ArtifactSha256))
+	if err != nil {
+		return nil, err
+	}
+	return NewLearned(lm, m.Version, l.penalty), nil
 }
 
 // artifactPath resolves the artifact location: the stored absolute/relative

@@ -9,6 +9,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/vidra/vidra-search/internal/event"
+	"github.com/vidra/vidra-search/internal/recommendation"
 	"github.com/vidra/vidra-search/internal/search"
 	"github.com/vidra/vidra-search/internal/suggest"
 )
@@ -49,6 +50,9 @@ func (s *Server) handleSearch(c echo.Context) error {
 		Language:      c.QueryParam("language"),
 		HideSensitive: qBool(c, "hide_sensitive"),
 		Mode:          c.QueryParam("mode"),
+		UserID:        c.QueryParam("user_id"),
+		SessionID:     c.QueryParam("session_id"),
+		Personalized:  qBool(c, "personalized"),
 	}
 	resp, err := s.svcs.Search.Search(c.Request().Context(), req)
 	if err != nil {
@@ -63,7 +67,14 @@ func (s *Server) handleRelated(c echo.Context) error {
 	if err != nil {
 		return newValidation("video_id", "must be a valid UUID")
 	}
-	resp, err := s.svcs.Rec.Related(c.Request().Context(), videoID, qInt(c, "limit"), qBool(c, "hide_sensitive"))
+	resp, err := s.svcs.Rec.Related(c.Request().Context(), recommendation.RelatedRequest{
+		VideoID:       videoID,
+		Limit:         qInt(c, "limit"),
+		HideSensitive: qBool(c, "hide_sensitive"),
+		UserID:        c.QueryParam("user_id"),
+		SessionID:     c.QueryParam("session_id"),
+		Personalized:  qBool(c, "personalized"),
+	})
 	if err != nil {
 		return err
 	}
@@ -72,7 +83,14 @@ func (s *Server) handleRelated(c echo.Context) error {
 
 // handleHome serves GET /internal/v1/recommendations/home.
 func (s *Server) handleHome(c echo.Context) error {
-	resp, err := s.svcs.Rec.Home(c.Request().Context(), qInt(c, "limit"), qBool(c, "hide_sensitive"), c.QueryParam("lang"))
+	resp, err := s.svcs.Rec.Home(c.Request().Context(), recommendation.HomeRequest{
+		Limit:         qInt(c, "limit"),
+		HideSensitive: qBool(c, "hide_sensitive"),
+		Lang:          c.QueryParam("lang"),
+		UserID:        c.QueryParam("user_id"),
+		SessionID:     c.QueryParam("session_id"),
+		Personalized:  qBool(c, "personalized"),
+	})
 	if err != nil {
 		return err
 	}
