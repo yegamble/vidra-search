@@ -1,0 +1,67 @@
+name: search-integration
+
+# Integration-tagged tests (`-tags=integration`) against REAL Postgres + Redis.
+# These exercise the actual sqlc SQL (search/suggest/recs correctness, event
+# idempotency, reconcile orphan suppression) — coverage the fast `make ci` gate
+# (unit tests against fakes) deliberately does not have. Kept SEPARATE so the
+# canonical gate stays fast and runnable without a DB. Each test self-skips when
+# DATABASE_URL/REDIS_URL are unset, so `make test-integration` is safe locally.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: vidra_search
+          POSTGRES_PASSWORD: vidra_search
+          POSTGRES_DB: vidra_search
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U vidra_search"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Install migrate CLI
+        run: |
+          curl -fsSL https://github.com/golang-migrate/migrate/releases/download/v4.17.1/migrate.linux-amd64.tar.gz \
+            | tar xz -C /usr/local/bin migrate
+
+      - name: Run migrations against a fresh database
+        env:
+          DATABASE_URL: postgres://vidra_search:vidra_search@localhost:5432/vidra_search?sslmode=disable
+        run: migrate -path migrations -database "$DATABASE_URL&x-migrations-table=vidra_search_migrations" up
+
+      - name: Run integration tests (make test-integration)
+        env:
+          DATABASE_URL: postgres://vidra_search:vidra_search@localhost:5432/vidra_search?sslmode=disable
+          REDIS_URL: redis://localhost:6379/0
+        run: make test-integration

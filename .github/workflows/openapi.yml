@@ -1,0 +1,50 @@
+name: openapi
+
+# The CI half of the documentation stop guard for vidra-search's internal API:
+#   1. lint  — the spec must be a valid, clean OpenAPI document (Redocly).
+#   2. drift — the routes registered in internal/api must match the spec exactly
+#              (TestOpenAPIContract), so an endpoint added or removed in code
+#              without a matching spec edit fails the build.
+#
+# api/openapi.yaml is the contract vidra-core builds its search client against,
+# so keeping it lint-clean and drift-free here is what keeps that integration
+# meaningful.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  openapi:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the OpenAPI contract exists
+        run: |
+          if [ ! -f api/openapi.yaml ]; then
+            echo "::error::api/openapi.yaml is missing. The internal API contract must be maintained." >&2
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Lint the OpenAPI contract (Redocly)
+        # Pinned to the 1.x line (not @latest) so a new Redocly release can't turn
+        # CI red with no spec change. Keep in lock-step with the Makefile
+        # `openapi-lint` target; bump deliberately.
+        run: npx --yes @redocly/cli@1 lint api/openapi.yaml
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Verify routes match the OpenAPI contract (drift guard)
+        run: make openapi-verify

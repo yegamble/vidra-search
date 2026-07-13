@@ -1,0 +1,73 @@
+name: search-ci
+
+# Canonical gate for vidra-search: run the SAME `make ci` developers run locally
+# (fmt-check + vet + openapi-verify + sqlc-verify + test-race). Postgres/Redis are
+# provisioned and migrations applied so the run also proves the schema migrates
+# cleanly, even though `make ci`'s unit tests use in-memory fakes. Do not add
+# checks here that aren't in `make ci` (ci-guard.yml enforces this).
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: vidra_search
+          POSTGRES_PASSWORD: vidra_search
+          POSTGRES_DB: vidra_search
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U vidra_search"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Install migrate CLI
+        run: |
+          curl -fsSL https://github.com/golang-migrate/migrate/releases/download/v4.17.1/migrate.linux-amd64.tar.gz \
+            | tar xz -C /usr/local/bin migrate
+
+      # Pinned to the Makefile's SQLC_VERSION so `make ci`'s sqlc-verify takes the
+      # fast binary path instead of compiling sqlc via `go run` each run.
+      - name: Install sqlc (used by make ci's sqlc-verify)
+        run: |
+          curl -fsSL https://github.com/sqlc-dev/sqlc/releases/download/v1.31.1/sqlc_1.31.1_linux_amd64.tar.gz \
+            | tar xz -C /usr/local/bin sqlc
+
+      - name: Run migrations against a fresh database
+        env:
+          DATABASE_URL: postgres://vidra_search:vidra_search@localhost:5432/vidra_search?sslmode=disable
+        run: migrate -path migrations -database "$DATABASE_URL&x-migrations-table=vidra_search_migrations" up
+
+      - name: Run canonical gate (make ci)
+        env:
+          DATABASE_URL: postgres://vidra_search:vidra_search@localhost:5432/vidra_search?sslmode=disable
+          REDIS_URL: redis://localhost:6379/0
+        run: make ci

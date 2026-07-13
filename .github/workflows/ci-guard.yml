@@ -1,0 +1,46 @@
+name: ci-guard
+
+# CI integrity / parity monitor for vidra-search. Guards the OTHER workflows so a
+# green check on GitHub means the same gate that passes locally actually ran — not
+# a workflow quietly weakened to pass. Fails when:
+#   1. a workflow hides failures with `continue-on-error: true`
+#      (escape hatch: annotate the line `# ci-guard:allow` for a job the team has
+#       explicitly decided is experimental),
+#   2. search-ci.yml does not invoke the canonical `make ci` gate.
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/**"
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: No hidden failures (continue-on-error)
+        run: |
+          bad=$(grep -rnE '^[[:space:]]*continue-on-error:[[:space:]]*true' .github/workflows \
+            | grep -v 'ci-guard:allow' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::continue-on-error: true hides failures. Remove it, or mark the line '# ci-guard:allow' if the job is intentionally experimental:" >&2
+            echo "$bad" >&2
+            exit 1
+          fi
+          echo "OK: no unmarked continue-on-error."
+
+      - name: Search CI runs the canonical gate
+        run: |
+          if ! grep -Eq 'make ci' .github/workflows/search-ci.yml; then
+            echo "::error::search-ci.yml must run 'make ci' so CI mirrors the local gate exactly." >&2
+            exit 1
+          fi
+          echo "OK: search-ci.yml invokes 'make ci'."
