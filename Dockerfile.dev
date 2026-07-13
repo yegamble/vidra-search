@@ -1,0 +1,23 @@
+# syntax=docker/dockerfile:1
+#
+# DEV-ONLY image: runs `air` against the bind-mounted source tree for live
+# rebuild+restart on .go changes. Never used by production builds (those use
+# ./Dockerfile). Source is NOT copied in — it arrives via bind mount at /app.
+FROM golang:1.26-alpine
+
+RUN apk add --no-cache ca-certificates wget git
+
+# Pin air (do not float @latest in an image).
+RUN go install github.com/air-verse/air@v1.65.3
+
+WORKDIR /app
+
+# -buildvcs=false: the bind-mounted .git has host ownership; avoid
+# "error obtaining VCS status" failures on rebuilds.
+ENV CGO_ENABLED=0 \
+    GOFLAGS=-buildvcs=false \
+    GOCACHE=/root/.cache/go-build \
+    GOMODCACHE=/go/pkg/mod
+
+EXPOSE 8080
+CMD ["air", "-c", ".air.toml"]

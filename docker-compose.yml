@@ -1,0 +1,85 @@
+# vidra-search standalone local development stack.
+#
+# Deliberately uses NON-DEFAULT host ports (postgres 5433, redis 6380, api 8081)
+# so it never collides with the main vidra stack (which owns 5432/6379/8080/3000).
+# The service can also run against vidra-core's shared database — this compose is
+# for developing vidra-search in isolation.
+#
+# Usage:
+#   docker compose up --build            # postgres + redis + migrate + api
+#   docker compose up -d postgres redis migrate   # just the deps (for `go test -tags integration`)
+#
+# For integration tests from the host:
+#   export DATABASE_URL=postgres://vidra_search:vidra_search@localhost:5433/vidra_search?sslmode=disable
+#   export REDIS_URL=redis://localhost:6380/0
+#   go test -tags integration ./...
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-vidra_search}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vidra_search}
+      POSTGRES_DB: ${POSTGRES_DB:-vidra_search}
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - search_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vidra_search} -d ${POSTGRES_DB:-vidra_search}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "${REDIS_PORT:-6380}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # One-shot migration. The x-migrations-table URL parameter lands the golang-
+  # migrate version ledger in `vidra_search_migrations` (in public), so it never
+  # collides with vidra-core's schema_migrations when sharing a database.
+  migrate:
+    image: migrate/migrate:v4.17.1
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./migrations:/migrations:ro
+    command:
+      - "-path=/migrations"
+      - "-database=postgres://${POSTGRES_USER:-vidra_search}:${POSTGRES_PASSWORD:-vidra_search}@postgres:5432/${POSTGRES_DB:-vidra_search}?sslmode=disable&x-migrations-table=vidra_search_migrations"
+      - "up"
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      VIDRA_ENV: ${VIDRA_ENV:-development}
+      HTTP_PORT: "8080"
+      DATABASE_URL: postgres://${POSTGRES_USER:-vidra_search}:${POSTGRES_PASSWORD:-vidra_search}@postgres:5432/${POSTGRES_DB:-vidra_search}?sslmode=disable
+      REDIS_URL: redis://redis:6379/0
+      # Dev-only shared secret. NEVER commit a real value; a shared deployment
+      # sets INTERNAL_SECRET to a strong (>=32 byte) value.
+      INTERNAL_SECRET: ${INTERNAL_SECRET:-dev-insecure-internal-secret-change-me-0000}
+      METRICS_ENABLED: ${METRICS_ENABLED:-true}
+      LOG_FORMAT: ${LOG_FORMAT:-text}
+    ports:
+      - "${SEARCH_HTTP_PORT:-8081}:8080"
+
+volumes:
+  search_postgres_data:

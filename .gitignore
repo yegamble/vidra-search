@@ -1,0 +1,17 @@
+# Build output
+/bin/
+/tmp/
+
+# Local env / secrets
+.env
+.env.*
+!.env.example
+
+# Go test/coverage artifacts
+*.out
+coverage.*
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
