@@ -193,4 +193,4 @@ ranker and the `model_loader` worker hot-swaps within its interval. See
 
 ## License
 
-TBD.
+vidra-search is free software licensed under the [GNU Affero General Public License v3.0](LICENSE).
