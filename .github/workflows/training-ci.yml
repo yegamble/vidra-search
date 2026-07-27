@@ -19,28 +19,41 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   smoke:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: training
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.11"
 
-      - name: Install training deps
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e '.[dev]'
+      - name: Set up uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.28"
+          working-directory: training
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install the locked training environment
+        run: uv sync --locked --all-extras
 
       - name: Run the training smoke test (synthetic data, no DB)
-        run: pytest -q
+        run: uv run --locked pytest -q
 
       - name: Prove the CLI smoke path emits a leaves-loadable artifact
         run: |
-          python train_ranker.py --smoke --smoke-out /tmp/ranker.txt
+          uv run --locked python train_ranker.py --smoke --smoke-out /tmp/ranker.txt
           head -2 /tmp/ranker.txt | grep -q 'version=v3'

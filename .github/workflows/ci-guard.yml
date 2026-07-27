@@ -3,10 +3,11 @@ name: ci-guard
 # CI integrity / parity monitor for vidra-search. Guards the OTHER workflows so a
 # green check on GitHub means the same gate that passes locally actually ran — not
 # a workflow quietly weakened to pass. Fails when:
-#   1. a workflow hides failures with `continue-on-error: true`
+#   1. an external action is not pinned to a full 40-character commit SHA,
+#   2. a workflow hides failures with `continue-on-error: true`
 #      (escape hatch: annotate the line `# ci-guard:allow` for a job the team has
 #       explicitly decided is experimental),
-#   2. search-ci.yml does not invoke the canonical `make ci` gate.
+#   3. search-ci.yml does not invoke the canonical `make ci` gate.
 on:
   push:
     branches: [main]
@@ -20,11 +21,32 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   guard:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: External actions use immutable commit pins
+        run: |
+          bad=$(
+            grep -rnE '^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]+' .github/workflows \
+              | grep -vE 'uses:[[:space:]]+\./' \
+              | grep -vE '@[0-9a-f]{40}([[:space:]]+#.*)?[[:space:]]*$' || true
+          )
+          if [ -n "$bad" ]; then
+            echo "::error::External actions must be pinned to a full 40-character commit SHA:" >&2
+            echo "$bad" >&2
+            exit 1
+          fi
+          echo "OK: every external action uses an immutable commit pin."
 
       - name: No hidden failures (continue-on-error)
         run: |
