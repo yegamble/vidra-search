@@ -46,7 +46,7 @@ services:
   # migrate version ledger in `vidra_search_migrations` (in public), so it never
   # collides with vidra-core's schema_migrations when sharing a database.
   migrate:
-    image: migrate/migrate:v4.17.1
+    image: migrate/migrate:v4.19.1
     depends_on:
       postgres:
         condition: service_healthy
