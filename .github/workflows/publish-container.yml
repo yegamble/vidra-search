@@ -3,12 +3,22 @@ name: publish-container
 on:
   release:
     types: [published]
+  # Re-publish the image for a tag that is ALREADY released — a build that died
+  # on a transient registry error, or a tag whose release predates this
+  # workflow. It builds the tag, never the default branch (see "Resolve the tag
+  # being published"), so it can never quietly ship main under a release tag.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: existing vX.Y.Z tag to build and publish
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.release.tag_name }}
+  group: ${{ github.workflow }}-${{ github.event.release.tag_name || inputs.tag }}
   cancel-in-progress: false
 
 env:
@@ -25,10 +35,35 @@ jobs:
       id-token: write
       attestations: write
     steps:
+      # One source of truth for "which tag is this build?", so the two triggers
+      # cannot drift: `inputs.tag` is empty on a release event and
+      # `github.event.release.tag_name` is empty on a dispatch. The existence
+      # check runs BEFORE the checkout so a typo'd dispatch input fails with a
+      # sentence instead of a checkout error — and so this workflow only ever
+      # builds a tag, never the default branch.
+      - name: Resolve the tag being published
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -eu
+          TAG="${RELEASE_TAG:-$INPUT_TAG}"
+          if [ -z "${TAG}" ]; then
+            echo "::error::No tag to publish: neither the release payload nor the 'tag' input carried one."
+            exit 1
+          fi
+          if ! gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" >/dev/null 2>&1; then
+            echo "::error::Tag '${TAG}' does not exist in ${GITHUB_REPOSITORY}. Push the tag (or cut the release) first — this workflow never builds the default branch."
+            exit 1
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
       - name: Check out the released source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ steps.tag.outputs.tag }}
           persist-credentials: false
 
       - name: Set up Docker Buildx
@@ -47,7 +82,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=${{ github.event.release.tag_name }}
+            type=raw,value=${{ steps.tag.outputs.tag }}
             type=sha,format=long
 
       - name: Build and push the released image
