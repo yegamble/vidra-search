@@ -66,6 +66,24 @@ jobs:
           ref: ${{ steps.tag.outputs.tag }}
           persist-credentials: false
 
+      # The short SHA mirrors what `make build` bakes in locally (Makefile's
+      # COMMIT), so GET /version reads the same whether the binary came from a
+      # developer laptop or from this workflow. HEAD is the released tag because
+      # the checkout above pinned `ref:` to it.
+      #
+      # BUILD_DATE is the tag commit's own date rather than the release's
+      # published_at: it is defined for BOTH triggers, it is stable for a given
+      # tag (so a re-publish still hits the gha cache and produces the same
+      # image), and it is the same value whichever trigger got here.
+      - name: Derive the build metadata baked into the binary
+        id: buildinfo
+        run: |
+          set -eu
+          {
+            echo "commit=$(git rev-parse --short HEAD)"
+            echo "date=$(TZ=UTC git show -s --date=iso-strict-local --format=%cd HEAD)"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
@@ -93,6 +111,16 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Injected into internal/version via -ldflags (see Dockerfile). Without
+          # these the released image reports "0.1.0 / unknown / unknown" forever,
+          # which makes "which build is running?" unanswerable during an
+          # incident. All three derive from the resolved tag and the commit it
+          # points at, so a release and a workflow_dispatch re-publish of that
+          # same tag produce identical images.
+          build-args: |
+            VERSION=${{ steps.tag.outputs.tag }}
+            COMMIT=${{ steps.buildinfo.outputs.commit }}
+            BUILD_DATE=${{ steps.buildinfo.outputs.date }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
