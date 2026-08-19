@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://github.com/yegamble/vidra">
+    <img src="https://raw.githubusercontent.com/yegamble/vidra-branding/main/assets/logo/vidra-icon.svg" width="72" alt="Vidra">
+  </a>
+</p>
+
 # Vidra Search
 
 The search, suggestion, and recommendation service for
