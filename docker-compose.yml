@@ -8,6 +8,9 @@
 # Usage:
 #   docker compose up --build            # postgres + redis + migrate + api
 #   docker compose up -d postgres redis migrate   # just the deps (for `go test -tags integration`)
+#                                                 # `migrate` builds the service
+#                                                 # image; `make migrate-up` is
+#                                                 # the no-Docker equivalent.
 #
 # For integration tests from the host:
 #   export DATABASE_URL=postgres://vidra_search:vidra_search@localhost:5433/vidra_search?sslmode=disable
@@ -42,20 +45,23 @@ services:
       timeout: 3s
       retries: 10
 
-  # One-shot migration. The x-migrations-table URL parameter lands the golang-
-  # migrate version ledger in `vidra_search_migrations` (in public), so it never
-  # collides with vidra-core's schema_migrations when sharing a database.
+  # One-shot migration, run by the SERVICE image itself (`api migrate up`, the
+  # migrations are compiled in) — the same code path a production deployment
+  # uses, so this stack exercises it. No golang-migrate CLI image and no
+  # bind-mounted migrations directory. The version ledger lands in
+  # `vidra_search_migrations` (in public), never colliding with vidra-core's
+  # schema_migrations when the two services share a database; the name is
+  # compiled in, not a URL parameter (see internal/dbmigrate).
   migrate:
-    image: migrate/migrate:v4.19.1
+    build:
+      context: .
+      dockerfile: Dockerfile
     depends_on:
       postgres:
         condition: service_healthy
-    volumes:
-      - ./migrations:/migrations:ro
-    command:
-      - "-path=/migrations"
-      - "-database=postgres://${POSTGRES_USER:-vidra_search}:${POSTGRES_PASSWORD:-vidra_search}@postgres:5432/${POSTGRES_DB:-vidra_search}?sslmode=disable&x-migrations-table=vidra_search_migrations"
-      - "up"
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-vidra_search}:${POSTGRES_PASSWORD:-vidra_search}@postgres:5432/${POSTGRES_DB:-vidra_search}?sslmode=disable
+    command: ["migrate", "up"]
 
   api:
     build:
