@@ -27,7 +27,10 @@ services:
     ports:
       - "${POSTGRES_PORT:-5433}:5432"
     volumes:
-      - search_postgres_data:/var/lib/postgresql/data
+      # postgres:18+ images keep the cluster in a version-specific subdirectory
+      # and REFUSE to start when the legacy /var/lib/postgresql/data path is a
+      # mount (even an empty one). Mount the parent, as the image documents.
+      - search_postgres_data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vidra_search} -d ${POSTGRES_DB:-vidra_search}"]
       interval: 5s
