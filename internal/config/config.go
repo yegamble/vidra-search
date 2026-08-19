@@ -19,6 +19,9 @@ import (
 // value (and any secret shorter than 32 bytes) in production.
 const devInternalSecret = "dev-insecure-internal-secret-change-me-0000"
 
+// defaultDatabaseURL is the standalone docker-compose Postgres (host port 5433).
+const defaultDatabaseURL = "postgres://vidra_search:vidra_search@localhost:5433/vidra_search?sslmode=disable"
+
 // Config holds all runtime configuration for the vidra-search service.
 type Config struct {
 	// Environment is one of "development", "test", or "production".
@@ -119,7 +122,7 @@ func Load() (*Config, error) {
 		HTTPShutdownTimeout: getEnvDuration("HTTP_SHUTDOWN_TIMEOUT", 20*time.Second),
 		HTTPRequestTimeout:  getEnvDuration("HTTP_REQUEST_TIMEOUT", 10*time.Second),
 		HTTPBodyLimit:       getEnv("HTTP_BODY_LIMIT", "2M"),
-		DatabaseURL:         getEnv("DATABASE_URL", "postgres://vidra_search:vidra_search@localhost:5433/vidra_search?sslmode=disable"),
+		DatabaseURL:         getEnv("DATABASE_URL", defaultDatabaseURL),
 		RedisURL:            getEnv("REDIS_URL", "redis://localhost:6380/0"),
 		InternalSecret:      getEnv("INTERNAL_SECRET", devInternalSecret),
 
@@ -185,6 +188,18 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// LoadDatabaseURL reads only the database DSN, with the same default and the
+// same required check Load applies. The `migrate` subcommand uses it: a migrator
+// needs the DSN and nothing else, and must not demand unrelated service config
+// (a production INTERNAL_SECRET, a reachable Redis) just to touch the schema.
+func LoadDatabaseURL() (string, error) {
+	dsn := getEnv("DATABASE_URL", defaultDatabaseURL)
+	if strings.TrimSpace(dsn) == "" {
+		return "", fmt.Errorf("config: DATABASE_URL is required")
+	}
+	return dsn, nil
 }
 
 func (c *Config) validate() error {

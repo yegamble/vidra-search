@@ -2,10 +2,15 @@
 // search/suggestion/recommendation/event API under /internal/v1 (HMAC-
 // authenticated) plus the ops probes. Configuration comes entirely from the
 // environment (internal/config).
+//
+// It also carries the schema migrator as a subcommand — `api migrate up` /
+// `api migrate version` (migrate.go) — so the image needs no golang-migrate CLI
+// and no bind-mounted migrations directory.
 package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -30,13 +35,26 @@ import (
 )
 
 func main() {
-	if err := run(); err != nil {
+	if err := run(os.Args[1:]); err != nil {
 		slog.Error("vidra-search: fatal", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run() error {
+// run dispatches the argv subcommand. No arguments serves the HTTP API — the
+// image's default, since the binary is the ENTRYPOINT — and `migrate …` runs the
+// schema migrator (migrate.go), reached by overriding the container command.
+func run(args []string) error {
+	if len(args) > 0 {
+		if args[0] != "migrate" {
+			return fmt.Errorf("unknown command %q (want: migrate, or no arguments to serve the API)", args[0])
+		}
+		return runMigrate(args[1:])
+	}
+	return serve()
+}
+
+func serve() error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err

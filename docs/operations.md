@@ -220,8 +220,14 @@ SELECT version, status, activated_at FROM search.models WHERE kind='ranker' ORDE
 
 ## Common tasks
 
-- **Apply migrations**: `make migrate-up` (uses
-  `x-migrations-table=vidra_search_migrations`).
+- **Apply migrations**: `make migrate-up`, or `api migrate up` inside the
+  service image — the migrations are compiled into the binary and the ledger
+  table (`vidra_search_migrations`) is pinned in code, so the deployed image
+  needs neither the `migrate` CLI nor a checkout of `migrations/`.
+- **Check the schema version**: `make migrate-version` / `api migrate version`
+  prints `version=… dirty=… table=vidra_search_migrations` and exits non-zero on
+  a dirty ledger (a half-applied migration; repair it and force the version
+  before deploying).
 - **Regenerate typed queries** after a SQL change: `make sqlc` then commit
   `internal/store/sqlcgen`; `make sqlc-verify` guards drift in CI.
 - **Reseed a load-test corpus**: `COUNT=100000 make seed-loadtest`.
