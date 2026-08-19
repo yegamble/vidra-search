@@ -4,7 +4,27 @@
   </a>
 </p>
 
-# Vidra Search
+<h1 align="center">vidra-search</h1>
+
+<h3 align="center">Search, autosuggest and recommendations for Vidra — ranked IDs in, nothing leaked out.</h3>
+
+<p align="center">
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#architecture-at-a-glance">Architecture</a> ·
+  <a href="#internal-api">Internal API</a> ·
+  <a href="#ranking-models--training">Ranking models</a> ·
+  <a href="#documentation">Docs</a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/yegamble/vidra-search/actions/workflows/search-ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/yegamble/vidra-search/search-ci.yml?label=search-ci" alt="search-ci"></a>
+  <a href="https://github.com/yegamble/vidra-search/releases"><img src="https://img.shields.io/github/v/release/yegamble/vidra-search?label=release" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/yegamble/vidra-search" alt="License: AGPL-3.0"></a>
+  <img src="https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white" alt="Go 1.26">
+  <img src="https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL">
+  <img src="https://img.shields.io/badge/Redis-7-FF4438?logo=redis&logoColor=white" alt="Redis">
+  <img src="https://img.shields.io/badge/LightGBM-LambdaMART-9cf" alt="LightGBM LambdaMART">
+</p>
 
 The search, suggestion, and recommendation service for
 [Vidra](https://github.com/yegamble/vidra). It is an internal microservice: only
@@ -17,6 +37,17 @@ into decayed-counter trending, personal search history, and watch affinity. A
 learned LightGBM ranker is shadow-evaluated online and activated manually, and a
 co-visitation index powers related/home recommendations. Per-user
 search-history and full privacy-purge endpoints round out the surface.
+
+**Why it is built this way:**
+
+- **Ranked IDs only.** Titles, visibility and viewer state never leave core, so
+  search cannot leak what a viewer is not allowed to see.
+- **Never a hard dependency.** Any failure here is core's cue to fall back
+  silently to its own SQL — search cannot take the site down.
+- **Learned ranking without leaps of faith.** New LightGBM models ship in shadow,
+  are evaluated online against logged impressions, and are promoted manually.
+- **Privacy is an endpoint, not a promise.** Per-user history deletion and a full
+  purge (history, projections, anonymized logs) are part of the internal contract.
 
 > **Internal-only service — never publish its port to the internet.** HMAC auth
 > plus network isolation are the *only* protections; the server binds `0.0.0.0`
