@@ -220,11 +220,52 @@ SELECT version, status, activated_at FROM search.models WHERE kind='ranker' ORDE
 
 ## Common tasks
 
-- **Apply migrations**: `make migrate-up` (uses
-  `x-migrations-table=vidra_search_migrations`).
+- **Apply migrations**: `make migrate-up` from a checkout, or the service image's
+  own `migrate up` subcommand — `docker compose run --rm api migrate up`, or
+  `docker run --rm -e DATABASE_URL=… ghcr.io/<owner>/vidra-search:<tag> migrate up`
+  (the arguments append to the image's `ENTRYPOINT`; there is no `api` on
+  `PATH`, and `api` here is this repo's compose service — use the search
+  service's name in a deployment stack). The migrations are compiled into the
+  binary and the ledger table
+  (`public.vidra_search_migrations`) is pinned in code — table *and* schema — so
+  the deployed image needs neither the `migrate` CLI nor a checkout of
+  `migrations/`, and a DSN carrying a `search_path` — directly, or smuggled
+  through `options` — is refused rather than allowed to open a second ledger in
+  another schema. (An `options` value that sets anything else, say
+  `-c statement_timeout=30s`, is passed through untouched.)
+  `DATABASE_URL` is required: the migrator has no dev fallback.
+- **Check the schema version**: `make migrate-version`, or
+  `docker compose run --rm api migrate version` — prints
+  `version=… dirty=… table=vidra_search_migrations` and exits non-zero on a dirty
+  ledger (a half-applied migration; repair it and force the version before
+  deploying). It changes no schema of yours, but it is not strictly read-only:
+  golang-migrate CREATEs the (empty) ledger table when it is missing, so running
+  it against a never-migrated database leaves `vidra_search_migrations` behind.
+- **Repair a dirty ledger**: finish or undo the failed migration's SQL by hand,
+  then record where the schema actually is:
+  ```bash
+  docker compose run --rm migrate migrate force <version> --yes-i-know
+  ```
+  (Run it on the `migrate` service, not `api`: `migrate` owns this compose
+  file's only `build`, so a host without a `vidra-search:dev` image builds one
+  instead of trying to pull it. The trailing arguments replace the service's own
+  `migrate up`, so nothing runs against the half-repaired schema, and its only
+  dependency is postgres — no `--no-deps` needed.)
+  The flag is mandatory — forcing rewrites the recorded version **without
+  running any migration**, so a wrong number makes the next `migrate up` skip
+  migrations that never ran. The command prints the ledger before and after.
+  `--yes-i-know -1` empties the ledger entirely (`migrate up` then re-applies
+  everything from 0001).
 - **Regenerate typed queries** after a SQL change: `make sqlc` then commit
   `internal/store/sqlcgen`; `make sqlc-verify` guards drift in CI.
 - **Reseed a load-test corpus**: `COUNT=100000 make seed-loadtest`.
 - **Run a rollup once** (debug): `SEARCH_RUN_JOB=covis_rollup make covis-rollup`,
   or `make shadow-eval`.
 - **Train a shadow ranker**: see `training/README.md` and `docs/evaluation.md`.
+- **Dev Postgres refuses to start** after the image moved to `postgres:18`
+  ("database files are incompatible with server", or a `pg_upgrade` hint): the
+  `search_postgres_data` volume holds a cluster from an older major, and mounting
+  it at the path postgres:18 expects does not convert it. Local data is
+  disposable — `make reset` (`docker compose down -v`) drops the volume and the
+  next `docker compose up` re-migrates a fresh one. A *production* database is
+  never reset this way: it needs a real `pg_upgrade`/dump-restore.
