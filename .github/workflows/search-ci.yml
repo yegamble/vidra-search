@@ -1,10 +1,10 @@
 name: search-ci
 
 # Canonical gate for vidra-search: run the SAME `make ci` developers run locally
-# (fmt-check + vet + openapi-verify + sqlc-verify + test-race). Postgres/Redis are
-# provisioned and migrations applied so the run also proves the schema migrates
-# cleanly, even though `make ci`'s unit tests use in-memory fakes. Do not add
-# checks here that aren't in `make ci` (ci-guard.yml enforces this).
+# (fmt-check + vet + migrate-lint + openapi-verify + sqlc-verify + test-race).
+# Postgres/Redis are provisioned and migrations applied so the run also proves the
+# schema migrates cleanly, even though `make ci`'s unit tests use in-memory fakes.
+# Do not add checks here that aren't in `make ci` (ci-guard.yml enforces this).
 on:
   push:
     branches: [main]
