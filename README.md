@@ -21,8 +21,8 @@
   <a href="https://github.com/yegamble/vidra-search/releases"><img src="https://img.shields.io/github/v/release/yegamble/vidra-search?label=release" alt="Latest release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/yegamble/vidra-search" alt="License: AGPL-3.0"></a>
   <img src="https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white" alt="Go 1.26">
-  <img src="https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL">
-  <img src="https://img.shields.io/badge/Redis-7-FF4438?logo=redis&logoColor=white" alt="Redis">
+  <img src="https://img.shields.io/badge/PostgreSQL-18-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL 18">
+  <img src="https://img.shields.io/badge/Redis-8-FF4438?logo=redis&logoColor=white" alt="Redis 8">
   <img src="https://img.shields.io/badge/LightGBM-LambdaMART-9cf" alt="LightGBM LambdaMART">
 </p>
 
