@@ -9,8 +9,9 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 # The whole tree, migrations included: they are compiled into the binary
-# (migrations/embed.go), which is what lets `api migrate up` run in this image
-# with no golang-migrate CLI and no bind-mounted checkout.
+# (migrations/embed.go), which is what lets `docker run <image> migrate up` work
+# with no golang-migrate CLI and no bind-mounted checkout (the arguments append
+# to the ENTRYPOINT below).
 COPY . .
 
 # Build metadata baked into internal/version so a running container can answer

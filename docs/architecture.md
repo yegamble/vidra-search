@@ -114,8 +114,10 @@ event pipeline.
 - Schema `search` in a PostgreSQL database that may be shared with vidra-core.
   The golang-migrate ledger lands in `vidra_search_migrations` (in `public`) so
   it never collides with core's `schema_migrations`; the migrations are embedded
-  in the binary and applied by `api migrate up` (`internal/dbmigrate`), which
-  pins that table name in code rather than in a DSN parameter. The runtime pool sets
+  in the binary and applied by its `migrate up` subcommand — in a container,
+  `docker compose run --rm api migrate up` (`internal/dbmigrate`). Both the table
+  name *and* its schema are pinned in code rather than in DSN parameters, so no
+  connection string can move the ledger. The runtime pool sets
   `search_path=search,public`.
 - Corpus/ledger tables: `documents` (the corpus, with a generated weighted
   `tsvector` and trigram + prefix indexes), `events_inbox` (dedupe ledger), and

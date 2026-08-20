@@ -111,8 +111,16 @@ intentionally **not** part of the OpenAPI contract.
 
 **Prerequisites:** Go 1.26 and Docker; `sqlc v1.31.1` for codegen; Python 3.11 +
 [uv](https://github.com/astral-sh/uv) only for `training/`. Migrations are
-embedded in the binary (`api migrate up`), so no `migrate` CLI is needed — only
-the `make migrate-down` escape hatch still wants it.
+embedded in the binary and applied by its `migrate up` subcommand, so no
+`migrate` CLI is needed — only the `make migrate-down` escape hatch still wants
+it. The subcommand is the container's argument, not a program on `PATH`:
+
+```bash
+make migrate-up                              # from a checkout (needs DATABASE_URL)
+docker compose run --rm api migrate up       # in the dev stack
+docker run --rm -e DATABASE_URL=… \
+  ghcr.io/<owner>/vidra-search:<tag> migrate up  # anywhere the image runs
+```
 
 ```bash
 # 1. Bring up the standalone stack (postgres :5433, redis :6380, api :8081)
@@ -127,6 +135,12 @@ make run
 
 The standalone compose deliberately uses non-default host ports (5433 / 6380 /
 8081) so it never collides with the main stack's 5432 / 6379 / 8080.
+
+If Postgres exits at startup with *"database files are incompatible with
+server"* (or a `pg_upgrade` hint), the `search_postgres_data` volume was created
+by a pre-18 Postgres image and the 18 container will not adopt it. Dev data here
+is disposable — `make reset` (`docker compose down -v`) drops the volume, and
+the next `docker compose up` re-migrates from scratch.
 
 ## Configuration
 
