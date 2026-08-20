@@ -45,12 +45,18 @@ const Schema = "public"
 // invocation is normalized (see normalizeDSN) instead of failing obscurely.
 const legacyTableParam = "x-migrations-table"
 
-// schemaParams are the DSN parameters that move schema resolution. The migrator
-// refuses them: Schema and Table are compiled in, so a DSN that says otherwise
-// is a disagreement about where the ledger lives, exactly like a conflicting
+// searchPathParam moves schema resolution outright. The migrator refuses it:
+// Schema and Table are compiled in, so a DSN that says otherwise is a
+// disagreement about where the ledger lives, exactly like a conflicting
 // x-migrations-table. (Migrations themselves schema-qualify everything they
 // create, so they never needed a search_path either.)
-var schemaParams = []string{"search_path", "options"}
+const searchPathParam = "search_path"
+
+// optionsParam is libpq's general GUC channel: it carries arbitrary startup
+// options ("-c statement_timeout=30s"), most of which are none of the
+// migrator's business. Only a search_path smuggled through it moves the ledger,
+// so the value is inspected and refused on that alone rather than wholesale.
+const optionsParam = "options"
 
 // Status is the state of the migration ledger.
 type Status struct {
@@ -185,11 +191,12 @@ func open(dsn string) (*golangmigrate.Migrate, func(), error) {
 // normalizeDSN drops golang-migrate's CLI-only x-migrations-table parameter from
 // a URL-form DSN: pgx refuses unknown parameters, and operators inherit DSNs
 // that carry it from the previous migrator invocation. A parameter naming a
-// DIFFERENT table — or moving the schema (schemaParams) — is a real
-// disagreement with the compiled-in ledger and is refused rather than silently
-// ignored. Keyword/value DSNs ("host=… user=…") are passed through untouched:
-// they cannot carry x-migrations-table, and a search_path they do carry is
-// already neutralized by the pinned Schema.
+// DIFFERENT table — or moving the schema, whether by search_path or by an
+// options value carrying one — is a real disagreement with the compiled-in
+// ledger and is refused rather than silently ignored. An options value that
+// carries no search_path is left alone. Keyword/value DSNs ("host=… user=…")
+// are passed through untouched: they cannot carry x-migrations-table, and a
+// search_path they do carry is already neutralized by the pinned Schema.
 func normalizeDSN(dsn string) (string, error) {
 	if !strings.HasPrefix(dsn, "postgres://") && !strings.HasPrefix(dsn, "postgresql://") {
 		return dsn, nil
@@ -199,10 +206,14 @@ func normalizeDSN(dsn string) (string, error) {
 		return "", fmt.Errorf("dbmigrate: invalid database URL: %w", err)
 	}
 	q := u.Query()
-	for _, p := range schemaParams {
-		if q.Has(p) {
-			return "", fmt.Errorf("dbmigrate: database URL sets %s=%q but this binary owns the %q ledger in schema %q; drop the parameter (migrations schema-qualify everything they create)", p, q.Get(p), Table, Schema)
-		}
+	if q.Has(searchPathParam) {
+		return "", fmt.Errorf("dbmigrate: database URL sets %s=%q but this binary owns the %q ledger in schema %q; drop the parameter (migrations schema-qualify everything they create)", searchPathParam, q.Get(searchPathParam), Table, Schema)
+	}
+	// A GUC name is case-insensitive and libpq's options syntax has several
+	// spellings ("-c search_path=x", "--search_path=x"), so match the name
+	// itself rather than any one form.
+	if v := q.Get(optionsParam); strings.Contains(strings.ToLower(v), searchPathParam) {
+		return "", fmt.Errorf("dbmigrate: database URL sets %s=%q, which carries a %s, but this binary owns the %q ledger in schema %q; drop the %s (migrations schema-qualify everything they create)", optionsParam, v, searchPathParam, Table, Schema, searchPathParam)
 	}
 	if !q.Has(legacyTableParam) {
 		return dsn, nil

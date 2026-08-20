@@ -125,6 +125,18 @@ func TestNormalizeDSN(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name:    "options carrying a search_path in another spelling is refused",
+			in:      base + "&options=" + nurl.QueryEscape("--SEARCH_PATH=search"),
+			wantErr: true,
+		},
+		{
+			// options is libpq's general GUC channel, not a schema switch:
+			// refusing it wholesale would reject ordinary tuning.
+			name: "options without a search_path passed through",
+			in:   base + "&options=" + nurl.QueryEscape("-c statement_timeout=30s"),
+			want: base + "&options=" + nurl.QueryEscape("-c statement_timeout=30s"),
+		},
+		{
 			name: "keyword/value dsn passed through",
 			in:   "host=h user=u dbname=db sslmode=disable",
 			want: "host=h user=u dbname=db sslmode=disable",

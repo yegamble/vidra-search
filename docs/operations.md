@@ -229,8 +229,10 @@ SELECT version, status, activated_at FROM search.models WHERE kind='ranker' ORDE
   binary and the ledger table
   (`public.vidra_search_migrations`) is pinned in code — table *and* schema — so
   the deployed image needs neither the `migrate` CLI nor a checkout of
-  `migrations/`, and a DSN carrying `search_path`/`options` is refused rather
-  than allowed to open a second ledger in another schema.
+  `migrations/`, and a DSN carrying a `search_path` — directly, or smuggled
+  through `options` — is refused rather than allowed to open a second ledger in
+  another schema. (An `options` value that sets anything else, say
+  `-c statement_timeout=30s`, is passed through untouched.)
   `DATABASE_URL` is required: the migrator has no dev fallback.
 - **Check the schema version**: `make migrate-version`, or
   `docker compose run --rm api migrate version` — prints
@@ -242,10 +244,13 @@ SELECT version, status, activated_at FROM search.models WHERE kind='ranker' ORDE
 - **Repair a dirty ledger**: finish or undo the failed migration's SQL by hand,
   then record where the schema actually is:
   ```bash
-  docker compose run --rm --no-deps api migrate force <version> --yes-i-know
+  docker compose run --rm migrate migrate force <version> --yes-i-know
   ```
-  (`--no-deps` so the stack's own one-shot migrator does not run `migrate up`
-  against the half-repaired schema first.)
+  (Run it on the `migrate` service, not `api`: `migrate` owns this compose
+  file's only `build`, so a host without a `vidra-search:dev` image builds one
+  instead of trying to pull it. The trailing arguments replace the service's own
+  `migrate up`, so nothing runs against the half-repaired schema, and its only
+  dependency is postgres — no `--no-deps` needed.)
   The flag is mandatory — forcing rewrites the recorded version **without
   running any migration**, so a wrong number makes the next `migrate up` skip
   migrations that never ran. The command prints the ledger before and after.
