@@ -40,7 +40,10 @@ fi
 # padded with spaces is an exact word match and `rename_count` cannot trip the
 # RENAME rule. Statements are accumulated across lines up to the terminating
 # semicolon so a rule can span the lines of one statement, and a violation is
-# reported once, on the line that completed the match.
+# reported once, on the line that completed the match. EVERY rule reads that
+# accumulated text and none reads a raw line: a rule that looked at lines could
+# be walked past by putting a newline inside the keyword pair it matches, which
+# is what `ALTER TABLE t DROP\nCONSTRAINT c;` used to do.
 read -r -d '' lint_awk <<'AWK' || true
 function norm(s,   t) {
     t = toupper(s)
@@ -70,16 +73,27 @@ function collect_added(u,   rest, tok) {
     }
 }
 
-# DROP CONSTRAINT is judged at END: legal only as the widen-a-CHECK idiom, where
-# the same file re-adds the same constraint name with a wider predicate.
-function scan_drop_constraint(u, lineno,   rest, cname) {
-    rest = u
-    while (match(rest, " DROP CONSTRAINT ")) {
+# How many ` DROP CONSTRAINT ` there are in s, and the name of the n-th one.
+# Counting is how a drop is noticed the moment the statement text completes the
+# keyword pair; naming is deferred to end_statement, because the name can be on a
+# later line than the DROP.
+function drop_count(s,   n, rest) {
+    n = 0
+    rest = s
+    while (match(rest, dropc)) {
+        n++
         rest = substr(rest, RSTART + RLENGTH)
-        cname = first_token(rest)
-        record(lineno, "DROP CONSTRAINT " (cname == "" ? "<unparsed>" : cname) \
-            " with no matching ADD CONSTRAINT of the same name in this file — only the widen-a-CHECK idiom (drop, then re-add the same name) is allowed", cname)
     }
+    return n
+}
+
+function drop_name(s, n,   i, rest) {
+    rest = s
+    for (i = 1; i <= n; i++) {
+        if (!match(rest, dropc)) return ""
+        rest = substr(rest, RSTART + RLENGTH)
+    }
+    return first_token(rest)
 }
 
 # need != "" makes the violation conditional on that constraint name never being
@@ -91,9 +105,28 @@ function record(lineno, msg, need) {
     v_need[nv] = need
 }
 
+# end_statement runs once per COMPLETED statement, over its whole normalised
+# text. BOTH halves of the constraint rule live here — the names a statement ADDs
+# and the names its pending DROPs refer to — because only a finished statement is
+# guaranteed to hold a name the author split across lines. The verdict itself
+# still waits for END: a drop is legal exactly when some LATER statement in the
+# same file re-adds that name.
+function end_statement(u,   i, cname) {
+    collect_added(u)
+    for (i = 1; i <= np; i++) {
+        cname = drop_name(u, p_nth[i])
+        v_msg[p_at[i]] = "DROP CONSTRAINT " (cname == "" ? "<unparsed>" : cname) \
+            " with no matching ADD CONSTRAINT of the same name in this file — only the widen-a-CHECK idiom (drop, then re-add the same name) is allowed"
+        v_need[p_at[i]] = cname
+    }
+    np = 0
+}
+
 BEGIN {
     nv = 0
+    np = 0
     stmt = ""
+    dropc = " DROP CONSTRAINT "
     nr = 0
     nr++; pat[nr] = " DROP TABLE ";  rule[nr] = "DROP TABLE"
     nr++; pat[nr] = " DROP COLUMN "; rule[nr] = "DROP COLUMN"
@@ -117,10 +150,6 @@ BEGIN {
         gsub(q "[^" q "]*" q, " ", line)   # string literals ('rename' is not a RENAME)
     }
 
-    u = norm(line)
-    collect_added(u)
-    scan_drop_constraint(u, FNR)
-
     parts = split(line, part, ";")
     for (i = 1; i <= parts; i++) {
         prev = norm(stmt)
@@ -129,11 +158,29 @@ BEGIN {
         for (r = 1; r <= nr; r++)
             if (cur ~ pat[r] && prev !~ pat[r])
                 record(FNR, rule[r] " in a forward migration breaks one-release schema compat (the previous release still runs against this schema)", "")
-        if (i < parts) stmt = ""           # the semicolon ended the statement
+        # A DROP CONSTRAINT the statement text has just completed is booked here,
+        # against the line that completed it, and named at the end of the
+        # statement. Counting rather than re-scanning is what keeps one drop to
+        # one violation while its statement is still growing.
+        was = drop_count(prev)
+        now = drop_count(cur)
+        for (k = was + 1; k <= now; k++) {
+            record(FNR, "", "")
+            np++
+            p_at[np] = nv
+            p_nth[np] = k
+        }
+        if (i < parts) {                   # the semicolon ended the statement
+            end_statement(cur)
+            stmt = ""
+        }
     }
 }
 
 END {
+    # A file whose last statement has no terminating semicolon is still a file
+    # with a last statement.
+    if (stmt != "") end_statement(norm(stmt))
     bad = 0
     for (i = 1; i <= nv; i++) {
         if (v_need[i] != "" && (v_need[i] in added)) continue
