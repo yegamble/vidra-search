@@ -30,6 +30,12 @@ services:
       # postgres:18+ images keep the cluster in a version-specific subdirectory
       # and REFUSE to start when the legacy /var/lib/postgresql/data path is a
       # mount (even an empty one). Mount the parent, as the image documents.
+      #
+      # This only fixes FRESH volumes. A search_postgres_data volume created by
+      # postgres:16/17 still holds a pre-18 cluster and the container exits with
+      # "database files are incompatible with server" / a pg_upgrade hint. Dev
+      # data here is disposable, so throw the volume away and let the migrations
+      # rebuild it:  make reset  (i.e. `docker compose down -v`).
       - search_postgres_data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vidra_search} -d ${POSTGRES_DB:-vidra_search}"]
@@ -48,14 +54,21 @@ services:
       timeout: 3s
       retries: 10
 
-  # One-shot migration, run by the SERVICE image itself (`api migrate up`, the
-  # migrations are compiled in) — the same code path a production deployment
-  # uses, so this stack exercises it. No golang-migrate CLI image and no
+  # One-shot migration, run by the SERVICE image itself (the entrypoint binary's
+  # `migrate up` subcommand, migrations compiled in) — the same code path a
+  # production deployment uses, so this stack exercises it. No CLI image and no
   # bind-mounted migrations directory. The version ledger lands in
   # `vidra_search_migrations` (in public), never colliding with vidra-core's
-  # schema_migrations when the two services share a database; the name is
-  # compiled in, not a URL parameter (see internal/dbmigrate).
+  # schema_migrations when the two services share a database; the name and its
+  # schema are compiled in, not URL parameters (see internal/dbmigrate).
+  #
+  # This service owns the stack's ONLY build; the api service below runs the same
+  # image, so one build serves both. (Two build stanzas naming one tag is not the
+  # way: buildx bake fails the second target with "image already exists". The
+  # build lives here, not on api, because `docker compose up -d postgres redis
+  # migrate` — the deps-only workflow — has to be able to build it.)
   migrate:
+    image: vidra-search:dev
     build:
       context: .
       dockerfile: Dockerfile
@@ -67,9 +80,8 @@ services:
     command: ["migrate", "up"]
 
   api:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    # Built by the migrate service above (same image, one build).
+    image: vidra-search:dev
     depends_on:
       postgres:
         condition: service_healthy

@@ -8,9 +8,10 @@ DATABASE_URL ?= postgres://vidra_search:vidra_search@localhost:5433/vidra_search
 REDIS_URL    ?= redis://localhost:6380/0
 
 # Applying migrations needs no CLI: they are embedded in the binary and applied
-# by `api migrate up` (see migrations/embed.go + internal/dbmigrate), which pins
-# the ledger to `vidra_search_migrations` (in public) so it never collides with
-# vidra-core's schema_migrations when the two services share a database.
+# by the binary's own `migrate up` subcommand (see migrations/embed.go +
+# internal/dbmigrate), which pins the ledger to `public.vidra_search_migrations`
+# — table AND schema — so it never collides with vidra-core's schema_migrations
+# when the two services share a database.
 #
 # MIGRATE_URL is only for the CLI-only `migrate-down` escape hatch below, where
 # the ledger name has to travel as the x-migrations-table URL parameter. Keep the
@@ -114,6 +115,13 @@ up: ## Start the local standalone Docker stack (postgres, redis, migrate, api)
 .PHONY: down
 down: ## Stop the local Docker stack
 	docker compose down
+
+# Also the cure for a Postgres volume created by an older major (pre-18): the
+# postgres:18 container refuses to start on it ("database files are incompatible
+# with server"). Dev data is disposable — drop the volume and re-migrate.
+.PHONY: reset
+reset: ## Stop the local Docker stack AND delete its data volumes (fresh Postgres + Redis)
+	docker compose down -v
 
 .PHONY: shadow-eval
 shadow-eval: ## Run one shadow-evaluation pass over shadow ranker models and exit
