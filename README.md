@@ -21,8 +21,8 @@
   <a href="https://github.com/yegamble/vidra-search/releases"><img src="https://img.shields.io/github/v/release/yegamble/vidra-search?label=release" alt="Latest release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/yegamble/vidra-search" alt="License: AGPL-3.0"></a>
   <img src="https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white" alt="Go 1.26">
-  <img src="https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL">
-  <img src="https://img.shields.io/badge/Redis-7-FF4438?logo=redis&logoColor=white" alt="Redis">
+  <img src="https://img.shields.io/badge/PostgreSQL-18-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL 18">
+  <img src="https://img.shields.io/badge/Redis-8-FF4438?logo=redis&logoColor=white" alt="Redis 8">
   <img src="https://img.shields.io/badge/LightGBM-LambdaMART-9cf" alt="LightGBM LambdaMART">
 </p>
 
@@ -200,11 +200,12 @@ ranker and the `model_loader` worker hot-swaps within its interval. See
 
 | Target | What it does |
 |--------|--------------|
-| `make ci` | Canonical gate: `fmt-check vet openapi-verify sqlc-verify test-race`. |
+| `make ci` | Canonical gate: `fmt-check vet migrate-lint openapi-verify sqlc-verify test-race`. |
 | `make test` / `make test-race` | Unit tests (with / without the race detector). |
 | `make test-integration` | `-tags=integration` tests (self-skip without `DATABASE_URL`/`REDIS_URL`). |
 | `make migrate-up` / `migrate-version` | Apply the embedded migrations / report the ledger version (`vidra_search_migrations`). |
 | `make migrate-down` | Roll back one migration (dev escape hatch; the only target needing the `migrate` CLI). |
+| `make migrate-lint` | Reject destructive DDL in forward migrations (the one-release schema-compat policy, enforced). |
 | `make sqlc` / `sqlc-verify` | Regenerate / drift-check typed query code (sqlc v1.31.1, pinned). |
 | `make openapi-lint` / `openapi-verify` | Redocly lint / route-vs-spec drift guard. |
 | `make run` / `build` | Run / build the api binary. |
@@ -219,7 +220,7 @@ ranker and the `model_loader` worker hot-swaps within its interval. See
 
 | Workflow | What it runs |
 |----------|--------------|
-| `search-ci` | `make ci` against a real Postgres 16 + Redis 7, migrations applied first. |
+| `search-ci` | `make ci` against a real Postgres 18 + Redis 8, migrations applied first via the embedded migrator. |
 | `search-integration` | `-tags=integration` tests against provisioned Postgres + Redis. |
 | `openapi` | Redocly lint + the route-vs-spec drift guard. |
 | `training-ci` | Path-filtered to `training/`; runs the Python smoke suite. |
