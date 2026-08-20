@@ -9,9 +9,10 @@
 # not carry destructive DDL. Down migrations are exempt — they ARE the rollback
 # path, and are destructive by definition.
 #
-# Kept in sync by hand with vidra-core/scripts/migrate-lint.sh: the two copies
-# are deliberately identical and carry no repo-specific strings. Change one,
-# change the other.
+# Kept in sync by hand between vidra-core/scripts/migrate-lint.sh and
+# vidra-search/scripts/migrate-lint.sh: the two copies are deliberately
+# byte-identical and carry no repo-specific strings. Change one, change the
+# other. (meta-ci asserts the identity.)
 #
 # Usage: scripts/migrate-lint.sh [migrations-dir]   (default: <repo>/migrations)
 #
