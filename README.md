@@ -200,11 +200,12 @@ ranker and the `model_loader` worker hot-swaps within its interval. See
 
 | Target | What it does |
 |--------|--------------|
-| `make ci` | Canonical gate: `fmt-check vet openapi-verify sqlc-verify test-race`. |
+| `make ci` | Canonical gate: `fmt-check vet migrate-lint openapi-verify sqlc-verify test-race`. |
 | `make test` / `make test-race` | Unit tests (with / without the race detector). |
 | `make test-integration` | `-tags=integration` tests (self-skip without `DATABASE_URL`/`REDIS_URL`). |
 | `make migrate-up` / `migrate-version` | Apply the embedded migrations / report the ledger version (`vidra_search_migrations`). |
 | `make migrate-down` | Roll back one migration (dev escape hatch; the only target needing the `migrate` CLI). |
+| `make migrate-lint` | Reject destructive DDL in forward migrations (the one-release schema-compat policy, enforced). |
 | `make sqlc` / `sqlc-verify` | Regenerate / drift-check typed query code (sqlc v1.31.1, pinned). |
 | `make openapi-lint` / `openapi-verify` | Redocly lint / route-vs-spec drift guard. |
 | `make run` / `build` | Run / build the api binary. |
@@ -219,7 +220,7 @@ ranker and the `model_loader` worker hot-swaps within its interval. See
 
 | Workflow | What it runs |
 |----------|--------------|
-| `search-ci` | `make ci` against a real Postgres 16 + Redis 7, migrations applied first. |
+| `search-ci` | `make ci` against a real Postgres 18 + Redis 8, migrations applied first via the embedded migrator. |
 | `search-integration` | `-tags=integration` tests against provisioned Postgres + Redis. |
 | `openapi` | Redocly lint + the route-vs-spec drift guard. |
 | `training-ci` | Path-filtered to `training/`; runs the Python smoke suite. |
