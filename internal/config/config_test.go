@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -83,4 +84,39 @@ func TestLoadRejectsBadValues(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestLoadDatabaseURL pins the migrator's stricter contract: unlike Load, it has
+// no development fallback, so a deploy that loses DATABASE_URL fails with that
+// sentence instead of quietly migrating (or failing to reach) the dev database.
+func TestLoadDatabaseURL(t *testing.T) {
+	const dsn = "postgres://u:p@db:5432/vidra_search?sslmode=disable"
+
+	t.Run("returns the variable", func(t *testing.T) {
+		t.Setenv("DATABASE_URL", dsn)
+		got, err := LoadDatabaseURL()
+		if err != nil {
+			t.Fatalf("LoadDatabaseURL: %v", err)
+		}
+		if got != dsn {
+			t.Fatalf("LoadDatabaseURL = %q, want %q", got, dsn)
+		}
+	})
+
+	t.Run("empty is required, not defaulted", func(t *testing.T) {
+		t.Setenv("DATABASE_URL", "   ")
+		if got, err := LoadDatabaseURL(); err == nil {
+			t.Fatalf("LoadDatabaseURL = %q, want the required error", got)
+		}
+	})
+
+	t.Run("unset is required, not defaulted", func(t *testing.T) {
+		t.Setenv("DATABASE_URL", dsn) // registers restoration of the real value
+		if err := os.Unsetenv("DATABASE_URL"); err != nil {
+			t.Fatalf("unset DATABASE_URL: %v", err)
+		}
+		if got, err := LoadDatabaseURL(); err == nil {
+			t.Fatalf("LoadDatabaseURL = %q, want the required error", got)
+		}
+	})
 }

@@ -2,6 +2,7 @@ package dbmigrate
 
 import (
 	"io/fs"
+	nurl "net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -17,9 +18,16 @@ const migrationsDir = "../../migrations"
 // ledger in this table via `x-migrations-table`; changing the name would restart
 // the counter on every existing deployment and re-run every migration (and, in
 // the shared-database deployment, collide with vidra-core's schema_migrations).
+// The schema is pinned for the same reason: golang-migrate resolves the ledger
+// against CURRENT_SCHEMA() when SchemaName is empty, so a DSN carrying
+// search_path=search would open a SECOND, empty ledger in `search` and re-apply
+// every migration to an already-migrated database.
 func TestLedgerTableName(t *testing.T) {
 	if Table != "vidra_search_migrations" {
 		t.Fatalf("migration ledger table = %q, want vidra_search_migrations (existing deployments track their version there)", Table)
+	}
+	if Schema != "public" {
+		t.Fatalf("migration ledger schema = %q, want public (where the golang-migrate CLI left the ledger)", Schema)
 	}
 }
 
@@ -107,6 +115,16 @@ func TestNormalizeDSN(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name:    "search_path is refused",
+			in:      base + "&search_path=search",
+			wantErr: true,
+		},
+		{
+			name:    "options carrying a search_path is refused",
+			in:      base + "&options=" + nurl.QueryEscape("-c search_path=search"),
+			wantErr: true,
+		},
+		{
 			name: "keyword/value dsn passed through",
 			in:   "host=h user=u dbname=db sslmode=disable",
 			want: "host=h user=u dbname=db sslmode=disable",
@@ -128,6 +146,14 @@ func TestNormalizeDSN(t *testing.T) {
 				t.Fatalf("normalizeDSN(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestForceRejectsInvalidVersion pins the guard that runs BEFORE any database
+// is opened, so a nonsense version can never reach golang-migrate.
+func TestForceRejectsInvalidVersion(t *testing.T) {
+	if _, _, err := Force("postgres://u:p@127.0.0.1:1/db", -2); err == nil {
+		t.Fatal("Force(-2) = nil error, want a refusal (valid versions are >= -1)")
 	}
 }
 

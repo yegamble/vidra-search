@@ -3,9 +3,11 @@
 // authenticated) plus the ops probes. Configuration comes entirely from the
 // environment (internal/config).
 //
-// It also carries the schema migrator as a subcommand — `api migrate up` /
-// `api migrate version` (migrate.go) — so the image needs no golang-migrate CLI
-// and no bind-mounted migrations directory.
+// It also carries the schema migrator as a subcommand — `migrate up`,
+// `migrate version`, `migrate force` (migrate.go) — so the image needs no
+// golang-migrate CLI and no bind-mounted migrations directory. In a container
+// the subcommand is reached by appending it to the entrypoint, e.g.
+// `docker compose run --rm api migrate up`.
 package main
 
 import (

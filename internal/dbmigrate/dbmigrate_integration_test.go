@@ -57,11 +57,22 @@ func TestUpAppliesEmbeddedMigrationsToTheLedgerTable(t *testing.T) {
 
 	var version int64
 	var dirty bool
-	if err := db.QueryRow(`SELECT version, dirty FROM `+Table).Scan(&version, &dirty); err != nil {
-		t.Fatalf("read %s: %v", Table, err)
+	if err := db.QueryRow(`SELECT version, dirty FROM `+Schema+`.`+Table).Scan(&version, &dirty); err != nil {
+		t.Fatalf("read %s.%s: %v", Schema, Table, err)
 	}
 	if uint(version) != st.Version || dirty != st.Dirty {
-		t.Fatalf("%s holds (version=%d dirty=%t), Up reported %s", Table, version, dirty, st)
+		t.Fatalf("%s.%s holds (version=%d dirty=%t), Up reported %s", Schema, Table, version, dirty, st)
+	}
+
+	// …and it is the ONLY ledger in the database. Before the schema was pinned,
+	// a DSN carrying search_path=search made golang-migrate create a second,
+	// empty ledger in `search` and re-apply every migration.
+	var ledgers int
+	if err := db.QueryRow(`SELECT count(*) FROM pg_tables WHERE tablename = $1`, Table).Scan(&ledgers); err != nil {
+		t.Fatalf("count %s tables: %v", Table, err)
+	}
+	if ledgers != 1 {
+		t.Fatalf("found %d %q tables, want exactly 1 (in %s)", ledgers, Table, Schema)
 	}
 
 	// Re-running is a no-op, not an error and not a re-apply.
@@ -90,13 +101,104 @@ func TestUpAcceptsTheLegacyLedgerParameter(t *testing.T) {
 	if dsn == "" {
 		t.Skip("integration test: DATABASE_URL must be set")
 	}
-	sep := "?"
-	if strings.Contains(dsn, "?") {
-		sep = "&"
-	}
-	if _, err := Up(dsn+sep+legacyTableParam+"="+Table, io.Discard); err != nil {
+	if _, err := Up(dsn+dsnSep(dsn)+legacyTableParam+"="+Table, io.Discard); err != nil {
 		t.Fatalf("Up with %s in the DSN: %v", legacyTableParam, err)
 	}
+}
+
+// TestUpRefusesASearchPathDSN is the live half of the ledger-schema fix: such a
+// DSN used to succeed, silently creating a second ledger in the `search` schema.
+func TestUpRefusesASearchPathDSN(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("integration test: DATABASE_URL must be set")
+	}
+	if _, err := Up(dsn+dsnSep(dsn)+"search_path=search", io.Discard); err == nil {
+		t.Fatal("Up with search_path in the DSN succeeded, want a refusal")
+	}
+
+	db, err := sql.Open("pgx/v5", dsn)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	var stray int
+	if err := db.QueryRow(`SELECT count(*) FROM pg_tables WHERE tablename = $1 AND schemaname <> $2`, Table, Schema).Scan(&stray); err != nil {
+		t.Fatalf("count stray ledgers: %v", err)
+	}
+	if stray != 0 {
+		t.Fatalf("found %d %q tables outside %s", stray, Table, Schema)
+	}
+}
+
+// TestForceRepairsADirtyLedger exercises the repair path end to end: dirty the
+// ledger the way a half-applied migration would, force it back, and confirm the
+// recorded state — because a force is exactly the operation nobody gets to
+// rehearse during an incident.
+func TestForceRepairsADirtyLedger(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("integration test: DATABASE_URL must be set")
+	}
+	current, err := Up(dsn, io.Discard)
+	if err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+
+	db, err := sql.Open("pgx/v5", dsn)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	// Restore whatever the ledger said, whichever assertion below fails.
+	t.Cleanup(func() {
+		if _, _, err := Force(dsn, int(current.Version)); err != nil {
+			t.Fatalf("restore ledger to %d: %v", current.Version, err)
+		}
+	})
+
+	if _, err := db.Exec(`UPDATE ` + Schema + `.` + Table + ` SET dirty = true`); err != nil {
+		t.Fatalf("dirty the ledger: %v", err)
+	}
+	dirty, err := Version(dsn)
+	if err != nil {
+		t.Fatalf("Version: %v", err)
+	}
+	if !dirty.Dirty {
+		t.Fatalf("ledger did not go dirty: %s", dirty)
+	}
+
+	before, after, err := Force(dsn, int(current.Version))
+	if err != nil {
+		t.Fatalf("Force: %v", err)
+	}
+	if !before.Dirty {
+		t.Fatalf("Force reported a clean ledger before the force: %s", before)
+	}
+	if after.Dirty || !after.Applied || after.Version != current.Version {
+		t.Fatalf("Force left %s, want version=%d dirty=false", after, current.Version)
+	}
+	if reported, err := Version(dsn); err != nil || reported != after {
+		t.Fatalf("Version = %s (err %v), want %s", reported, err, after)
+	}
+
+	// -1 empties the ledger; Up then re-applies from scratch against the schema
+	// that is still there, which is a no-op for every idempotent migration —
+	// so only assert the ledger state, and let Cleanup put the version back.
+	if _, emptied, err := Force(dsn, -1); err != nil {
+		t.Fatalf("Force(-1): %v", err)
+	} else if emptied.Applied {
+		t.Fatalf("Force(-1) left %s, want an empty ledger", emptied)
+	}
+}
+
+// dsnSep is "?" or "&", whichever appends a parameter to dsn.
+func dsnSep(dsn string) string {
+	if strings.Contains(dsn, "?") {
+		return "&"
+	}
+	return "?"
 }
 
 // newestEmbeddedVersion is the highest numeric prefix among the embedded up

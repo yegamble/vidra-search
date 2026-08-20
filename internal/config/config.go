@@ -190,13 +190,19 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
-// LoadDatabaseURL reads only the database DSN, with the same default and the
-// same required check Load applies. The `migrate` subcommand uses it: a migrator
-// needs the DSN and nothing else, and must not demand unrelated service config
-// (a production INTERNAL_SECRET, a reachable Redis) just to touch the schema.
+// LoadDatabaseURL reads only the database DSN. The `migrate` subcommand uses it:
+// a migrator needs the DSN and nothing else, and must not demand unrelated
+// service config (a production INTERNAL_SECRET, a reachable Redis) just to touch
+// the schema.
+//
+// Unlike Load, it has NO development default. A deploy that loses DATABASE_URL
+// must fail loudly: falling back to the local dev DSN would either migrate the
+// wrong database or fail with a connection error that says nothing about the
+// missing variable. (`make migrate-up` passes DATABASE_URL explicitly, so the
+// Makefile's dev default still works.)
 func LoadDatabaseURL() (string, error) {
-	dsn := getEnv("DATABASE_URL", defaultDatabaseURL)
-	if strings.TrimSpace(dsn) == "" {
+	dsn, ok := os.LookupEnv("DATABASE_URL")
+	if !ok || strings.TrimSpace(dsn) == "" {
 		return "", fmt.Errorf("config: DATABASE_URL is required")
 	}
 	return dsn, nil
