@@ -3,7 +3,7 @@
 # DEV-ONLY image: runs `air` against the bind-mounted source tree for live
 # rebuild+restart on .go changes. Never used by production builds (those use
 # ./Dockerfile). Source is NOT copied in — it arrives via bind mount at /app.
-FROM golang:1.26-alpine
+FROM golang:1.27-alpine
 
 RUN apk add --no-cache ca-certificates wget git
 
