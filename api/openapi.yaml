@@ -172,6 +172,17 @@ paths:
           description: When true (and user_id present), advanced ranking applies personalization.
           schema:
             type: boolean
+        - name: skip_count
+          in: query
+          required: false
+          description: >-
+            When true, skip the simple-mode COUNT(*) and omit `total` from the
+            response. Defaults to false, i.e. the total IS computed. No effect in
+            advanced mode, whose total is a by-product of the recall it already
+            runs. `has_more` is exact either way.
+          schema:
+            type: boolean
+            default: false
       responses:
         '200':
           description: Ranked video ids.
@@ -579,6 +590,8 @@ components:
         - query
         - ids
         - model_version
+        - total_is_lower_bound
+        - has_more
       properties:
         query:
           type: string
@@ -590,6 +603,37 @@ components:
           type: string
         experiment:
           $ref: '#/components/schemas/Experiment'
+        total:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >-
+            Documents matching the query and the request's filters (eligibility,
+            hide_sensitive, tag, category, language), ignoring limit/offset.
+            Omitted only when skip_count=true — absent means "not computed",
+            never "zero". In simple mode this is EXACT: it is a COUNT(*) over the
+            same predicates the page query pages over, so
+            `offset + len(ids) == total` is a reliable end-of-results test. In
+            advanced mode it is the size of the stage-1 recall set the reranker
+            actually saw — the number of ranked results this service can serve —
+            which is capped, so it may be a lower bound (see
+            total_is_lower_bound).
+        total_is_lower_bound:
+          type: boolean
+          description: >-
+            True when `total` is "at least this many" rather than exact: advanced
+            mode reached its recall cap, so further matching documents exist but
+            were never ranked. Always false in simple mode, and false in advanced
+            mode when the recall came back under the cap (there `total` is exact
+            too). Render "top N results" when true, "N results" when false.
+        has_more:
+          type: boolean
+          description: >-
+            True when a further page from this service would return at least one
+            result. Exact, and computed independently of `total`, so it stays
+            correct under skip_count. It goes false once the advanced recall
+            ceiling is reached — paging must stop there, and total_is_lower_bound
+            is what says the corpus was not exhausted.
     RecommendationItem:
       type: object
       required:

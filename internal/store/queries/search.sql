@@ -33,3 +33,28 @@ WHERE d.eligible
   AND (sqlc.narg('language')::text IS NULL OR d.language = sqlc.narg('language'))
 ORDER BY score DESC, d.published_at DESC NULLS LAST, d.video_id
 LIMIT @lim::int OFFSET @off::int;
+
+-- name: SearchSimpleCount :one
+-- Total hit count for simple-mode search: COUNT(*) over EXACTLY the predicates
+-- SearchSimple pages over, with no ORDER BY / LIMIT / OFFSET. The scoring
+-- expression is irrelevant to the count, so only the FROM + WHERE are shared —
+-- and they must stay byte-identical to SearchSimple's. A count whose predicates
+-- drift from the page query's is worse than no count at all, so edit the two
+-- WHERE clauses together; TestSearchCountSharesSimpleWherePredicates (internal/
+-- store) fails the build if they ever diverge.
+WITH q AS (
+    SELECT websearch_to_tsquery('simple', @query::text) AS tsq
+)
+SELECT count(*)::bigint AS total
+FROM search.documents d, q
+WHERE d.eligible
+  AND (NOT @hide_sensitive::bool OR NOT d.is_sensitive)
+  AND (
+        d.tsv @@ q.tsq
+     OR lower(d.title) % @query::text
+     OR d.tags @> ARRAY[@query::text]
+     OR lower(d.channel_name) = @query::text
+      )
+  AND (sqlc.narg('tag')::text IS NULL OR sqlc.narg('tag') = ANY(d.tags))
+  AND (sqlc.narg('category')::text IS NULL OR d.category = sqlc.narg('category'))
+  AND (sqlc.narg('language')::text IS NULL OR d.language = sqlc.narg('language'));

@@ -53,6 +53,8 @@ func (s *Server) handleSearch(c echo.Context) error {
 		UserID:        c.QueryParam("user_id"),
 		SessionID:     c.QueryParam("session_id"),
 		Personalized:  qBool(c, "personalized"),
+		// Absent/invalid skip_count parses false, i.e. the total IS computed.
+		SkipCount: qBool(c, "skip_count"),
 	}
 	resp, err := s.svcs.Search.Search(c.Request().Context(), req)
 	if err != nil {
