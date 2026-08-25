@@ -90,3 +90,50 @@ func (q *Queries) SearchSimple(ctx context.Context, arg SearchSimpleParams) ([]S
 	}
 	return items, nil
 }
+
+const searchSimpleCount = `-- name: SearchSimpleCount :one
+WITH q AS (
+    SELECT websearch_to_tsquery('simple', $2::text) AS tsq
+)
+SELECT count(*)::bigint AS total
+FROM search.documents d, q
+WHERE d.eligible
+  AND (NOT $1::bool OR NOT d.is_sensitive)
+  AND (
+        d.tsv @@ q.tsq
+     OR lower(d.title) % $2::text
+     OR d.tags @> ARRAY[$2::text]
+     OR lower(d.channel_name) = $2::text
+      )
+  AND ($3::text IS NULL OR $3 = ANY(d.tags))
+  AND ($4::text IS NULL OR d.category = $4)
+  AND ($5::text IS NULL OR d.language = $5)
+`
+
+type SearchSimpleCountParams struct {
+	HideSensitive bool    `json:"hide_sensitive"`
+	Query         string  `json:"query"`
+	Tag           *string `json:"tag"`
+	Category      *string `json:"category"`
+	Language      *string `json:"language"`
+}
+
+// Total hit count for simple-mode search: COUNT(*) over EXACTLY the predicates
+// SearchSimple pages over, with no ORDER BY / LIMIT / OFFSET. The scoring
+// expression is irrelevant to the count, so only the FROM + WHERE are shared —
+// and they must stay byte-identical to SearchSimple's. A count whose predicates
+// drift from the page query's is worse than no count at all, so edit the two
+// WHERE clauses together; TestSearchCountSharesSimpleWherePredicates (internal/
+// store) fails the build if they ever diverge.
+func (q *Queries) SearchSimpleCount(ctx context.Context, arg SearchSimpleCountParams) (int64, error) {
+	row := q.db.QueryRow(ctx, searchSimpleCount,
+		arg.HideSensitive,
+		arg.Query,
+		arg.Tag,
+		arg.Category,
+		arg.Language,
+	)
+	var total int64
+	err := row.Scan(&total)
+	return total, err
+}

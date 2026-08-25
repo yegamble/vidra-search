@@ -22,7 +22,7 @@ func (heuristicRanker) Rerank(docs []ranking.Doc) []ranking.Ranked {
 func (heuristicRanker) Version() string { return "heuristic-v1" }
 
 // searchAdvanced runs the two-stage advanced funnel (§1.7): SQL stage-1 recall
-// (≤ recallLimit) enriched with per-doc text + engagement features, then a Go
+// (bounded by recallWindow) enriched with per-doc text + engagement features, then a Go
 // stage-2 rerank over those features plus the personalization signals
 // (neighbour/channel affinity, session intent). The ranker is chosen by
 // experiment assignment; personalization is applied only for a signed-in,
@@ -43,17 +43,38 @@ func (s *Service) searchAdvanced(ctx context.Context, req Request, normalized st
 
 	resp := Response{Query: req.Query, IDs: []Hit{}, ModelVersion: servedVersion, Experiment: assignment}
 
+	offset := req.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	limit := clampLimit(req.Limit)
+	// The recall window follows the requested page (see recallWindow): paging
+	// past the base block widens the recall instead of running off its end, which
+	// is what used to turn page ~26 into a permanently empty result set.
+	window := recallWindow(offset, limit)
+
+	// Recall one row past the window purely as an overflow probe — it tells us
+	// candidates remain beyond the window, and is dropped before ranking so the
+	// ranked set is exactly the window.
 	rows, err := s.q.SearchAdvancedRecall(ctx, sqlcgen.SearchAdvancedRecallParams{
 		Query:         normalized,
 		HideSensitive: req.HideSensitive,
 		Tag:           optStr(req.Tag),
 		Category:      optStr(req.Category),
 		Language:      optStr(req.Language),
-		Lim:           recallLimit,
+		Lim:           int32(window + 1),
 	})
 	if err != nil {
 		return Response{}, err
 	}
+	truncated := len(rows) > window
+	if truncated {
+		rows = rows[:window]
+	}
+	// Total is the recall set the reranker sees. Exact when the recall came back
+	// under the window, a lower bound when the probe fired.
+	resp.Total = intPtr(len(rows))
+	resp.TotalIsLowerBound = truncated
 	if len(rows) == 0 {
 		return resp, nil
 	}
@@ -106,17 +127,42 @@ func (s *Service) searchAdvanced(ctx context.Context, req Request, normalized st
 	ranked := ranker.Rerank(docs)
 
 	// Apply offset/limit in Go over the reranked order.
-	offset := req.Offset
-	if offset < 0 {
-		offset = 0
-	}
-	limit := clampLimit(req.Limit)
 	hits := make([]Hit, 0, limit)
 	for i := offset; i < len(ranked) && len(hits) < limit; i++ {
 		hits = append(hits, Hit{VideoID: ranked[i].VideoID, Score: ranked[i].Score})
 	}
 	resp.IDs = hits
+	// A further page is servable when ranked candidates remain inside this
+	// window, or when the probe fired AND the window still has room to grow. At
+	// the ceiling HasMore goes false — paging stops, and TotalIsLowerBound is
+	// what tells the client the corpus was not exhausted.
+	resp.HasMore = offset+len(hits) < len(ranked) || (truncated && window < maxRecallLimit)
 	return resp, nil
+}
+
+// recallWindow returns the stage-1 recall size for a page: the smallest whole
+// number of recallLimit-sized blocks that covers offset+limit, capped at
+// maxRecallLimit.
+//
+// Quantising to blocks rather than growing per request keeps the window — and
+// therefore the reranked order — identical for every page inside a block, so a
+// client paging forward only risks a reshuffle at the three block boundaries
+// instead of on every request. That reshuffle is inherent to reranking in Go
+// after a capped SQL recall: widening the window admits new candidates that the
+// ranker may interleave with ones already shown. Widening is still strictly
+// better than the alternative it replaces, which was returning nothing at all
+// past the first block.
+func recallWindow(offset, limit int) int {
+	want := offset + limit
+	// A negative `want` means offset+limit overflowed; fall back to the base block.
+	if want <= recallLimit {
+		return recallLimit
+	}
+	if want >= maxRecallLimit {
+		return maxRecallLimit
+	}
+	blocks := (want + recallLimit - 1) / recallLimit
+	return blocks * recallLimit
 }
 
 // pickRanker returns the reranker + reported version for the routed model version.
