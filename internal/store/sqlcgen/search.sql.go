@@ -38,8 +38,9 @@ WHERE d.eligible
   AND ($3::text IS NULL OR $3 = ANY(d.tags))
   AND ($4::text IS NULL OR d.category = $4)
   AND ($5::text IS NULL OR d.language = $5)
+  AND ($6::text IS NULL OR d.license = $6)
 ORDER BY score DESC, d.published_at DESC NULLS LAST, d.video_id
-LIMIT $7::int OFFSET $6::int
+LIMIT $8::int OFFSET $7::int
 `
 
 type SearchSimpleParams struct {
@@ -48,6 +49,7 @@ type SearchSimpleParams struct {
 	Tag           *string `json:"tag"`
 	Category      *string `json:"category"`
 	Language      *string `json:"language"`
+	License       *string `json:"license"`
 	Off           int32   `json:"off"`
 	Lim           int32   `json:"lim"`
 }
@@ -61,7 +63,8 @@ type SearchSimpleRow struct {
 // (websearch_to_tsquery), trigram title similarity, and exact tag/channel
 // matches; the score blends ts_rank_cd, trigram similarity, exact-match flags,
 // log-normalized views, and a 30-day freshness half-life. Static eligibility +
-// hide_sensitive + optional tag/category/language filters are applied in SQL.
+// hide_sensitive + optional tag/category/language/license filters are applied
+// in SQL.
 // Order is fully deterministic: score DESC, then newest, then id.
 func (q *Queries) SearchSimple(ctx context.Context, arg SearchSimpleParams) ([]SearchSimpleRow, error) {
 	rows, err := q.db.Query(ctx, searchSimple,
@@ -70,6 +73,7 @@ func (q *Queries) SearchSimple(ctx context.Context, arg SearchSimpleParams) ([]S
 		arg.Tag,
 		arg.Category,
 		arg.Language,
+		arg.License,
 		arg.Off,
 		arg.Lim,
 	)
@@ -108,6 +112,7 @@ WHERE d.eligible
   AND ($3::text IS NULL OR $3 = ANY(d.tags))
   AND ($4::text IS NULL OR d.category = $4)
   AND ($5::text IS NULL OR d.language = $5)
+  AND ($6::text IS NULL OR d.license = $6)
 `
 
 type SearchSimpleCountParams struct {
@@ -116,6 +121,7 @@ type SearchSimpleCountParams struct {
 	Tag           *string `json:"tag"`
 	Category      *string `json:"category"`
 	Language      *string `json:"language"`
+	License       *string `json:"license"`
 }
 
 // Total hit count for simple-mode search: COUNT(*) over EXACTLY the predicates
@@ -132,6 +138,7 @@ func (q *Queries) SearchSimpleCount(ctx context.Context, arg SearchSimpleCountPa
 		arg.Tag,
 		arg.Category,
 		arg.Language,
+		arg.License,
 	)
 	var total int64
 	err := row.Scan(&total)

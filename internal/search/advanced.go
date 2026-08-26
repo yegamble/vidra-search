@@ -62,6 +62,7 @@ func (s *Service) searchAdvanced(ctx context.Context, req Request, normalized st
 		Tag:           optStr(req.Tag),
 		Category:      optStr(req.Category),
 		Language:      optStr(req.Language),
+		License:       optStr(req.License),
 		Lim:           int32(window + 1),
 	})
 	if err != nil {

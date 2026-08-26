@@ -288,6 +288,7 @@ func TestIntegrationSearchFiltersAndSensitive(t *testing.T) {
 		v.Tags = []string{"programming", "go"}
 		v.Category = ptr("education")
 		v.Language = ptr("en")
+		v.License = ptr("1")
 	})
 	sensitive := video("golang concurrency uncensored", func(v *event.VideoDoc) {
 		v.IsSensitive = true
@@ -296,6 +297,7 @@ func TestIntegrationSearchFiltersAndSensitive(t *testing.T) {
 	other := video("golang concurrency spanish", func(v *event.VideoDoc) {
 		v.Language = ptr("es")
 		v.Tags = []string{"programming"}
+		v.License = ptr("7")
 	})
 	ingest(t, env, upsertEnvelope(t, clean), upsertEnvelope(t, sensitive), upsertEnvelope(t, other))
 
@@ -321,6 +323,19 @@ func TestIntegrationSearchFiltersAndSensitive(t *testing.T) {
 	respTag, _ := env.search.Search(ctx, search.Request{Query: "golang concurrency", Limit: 50, Tag: "go", HideSensitive: false})
 	if !containsID(respTag.IDs, clean.ID) || containsID(respTag.IDs, other.ID) {
 		t.Errorf("tag filter failed: %+v", respTag.IDs)
+	}
+
+	// License filter keeps only the doc carrying that licence id, and the total
+	// counts the narrowed set (SearchSimpleCount shares the predicate).
+	respLic, err := env.search.Search(ctx, search.Request{Query: "golang concurrency", Limit: 50, License: "7"})
+	if err != nil {
+		t.Fatalf("license search: %v", err)
+	}
+	if !containsID(respLic.IDs, other.ID) || containsID(respLic.IDs, clean.ID) {
+		t.Errorf("license filter failed: %+v", respLic.IDs)
+	}
+	if respLic.Total == nil || *respLic.Total != len(respLic.IDs) {
+		t.Errorf("license total = %v, want %d", respLic.Total, len(respLic.IDs))
 	}
 }
 

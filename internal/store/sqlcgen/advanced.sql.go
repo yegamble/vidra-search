@@ -202,7 +202,7 @@ recall AS (
     SELECT d.video_id
     FROM search.documents d, q
     WHERE d.eligible
-      AND (NOT $6::bool OR NOT d.is_sensitive)
+      AND (NOT $7::bool OR NOT d.is_sensitive)
       AND (
             d.tsv @@ q.tsq
          OR lower(d.title) % $1::text
@@ -216,7 +216,7 @@ recall AS (
     WHERE qve.normalized_query = $1::text
       AND qve.clicks > 0
       AND d.eligible
-      AND (NOT $6::bool OR NOT d.is_sensitive)
+      AND (NOT $7::bool OR NOT d.is_sensitive)
 )
 SELECT d.video_id, d.channel_id, d.language, d.category, d.tags,
        d.views, d.published_at, d.source_updated_at,
@@ -237,8 +237,9 @@ LEFT JOIN search.query_video_engagement qve
 WHERE ($2::text IS NULL OR $2 = ANY(d.tags))
   AND ($3::text IS NULL OR d.category = $3)
   AND ($4::text IS NULL OR d.language = $4)
+  AND ($5::text IS NULL OR d.license = $5)
 ORDER BY ts_rank DESC, d.views DESC, d.video_id
-LIMIT $5::int
+LIMIT $6::int
 `
 
 type SearchAdvancedRecallParams struct {
@@ -246,6 +247,7 @@ type SearchAdvancedRecallParams struct {
 	Tag           *string `json:"tag"`
 	Category      *string `json:"category"`
 	Language      *string `json:"language"`
+	License       *string `json:"license"`
 	Lim           int32   `json:"lim"`
 	HideSensitive bool    `json:"hide_sensitive"`
 }
@@ -282,6 +284,7 @@ func (q *Queries) SearchAdvancedRecall(ctx context.Context, arg SearchAdvancedRe
 		arg.Tag,
 		arg.Category,
 		arg.Language,
+		arg.License,
 		arg.Lim,
 		arg.HideSensitive,
 	)

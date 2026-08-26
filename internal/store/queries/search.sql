@@ -3,7 +3,8 @@
 -- (websearch_to_tsquery), trigram title similarity, and exact tag/channel
 -- matches; the score blends ts_rank_cd, trigram similarity, exact-match flags,
 -- log-normalized views, and a 30-day freshness half-life. Static eligibility +
--- hide_sensitive + optional tag/category/language filters are applied in SQL.
+-- hide_sensitive + optional tag/category/language/license filters are applied
+-- in SQL.
 -- Order is fully deterministic: score DESC, then newest, then id.
 WITH q AS (
     SELECT websearch_to_tsquery('simple', @query::text) AS tsq
@@ -31,6 +32,7 @@ WHERE d.eligible
   AND (sqlc.narg('tag')::text IS NULL OR sqlc.narg('tag') = ANY(d.tags))
   AND (sqlc.narg('category')::text IS NULL OR d.category = sqlc.narg('category'))
   AND (sqlc.narg('language')::text IS NULL OR d.language = sqlc.narg('language'))
+  AND (sqlc.narg('license')::text IS NULL OR d.license = sqlc.narg('license'))
 ORDER BY score DESC, d.published_at DESC NULLS LAST, d.video_id
 LIMIT @lim::int OFFSET @off::int;
 
@@ -57,4 +59,5 @@ WHERE d.eligible
       )
   AND (sqlc.narg('tag')::text IS NULL OR sqlc.narg('tag') = ANY(d.tags))
   AND (sqlc.narg('category')::text IS NULL OR d.category = sqlc.narg('category'))
-  AND (sqlc.narg('language')::text IS NULL OR d.language = sqlc.narg('language'));
+  AND (sqlc.narg('language')::text IS NULL OR d.language = sqlc.narg('language'))
+  AND (sqlc.narg('license')::text IS NULL OR d.license = sqlc.narg('license'));

@@ -77,6 +77,7 @@ type Request struct {
 	Tag           string
 	Category      string
 	Language      string
+	License       string
 	HideSensitive bool
 	Mode          string
 	UserID        string
@@ -103,7 +104,7 @@ type Hit struct {
 // stopped looking", which a bare page of ids cannot express:
 //
 //   - Total counts the documents matching the query AND the request's filters
-//     (eligibility, hide_sensitive, tag, category, language), ignoring
+//     (eligibility, hide_sensitive, tag, category, language, license), ignoring
 //     limit/offset. It is nil only when the caller asked to skip the count; nil
 //     means "not computed", never "zero".
 //   - In SIMPLE mode Total is EXACT. It is a COUNT(*) over the very same FROM +
@@ -192,6 +193,7 @@ func (s *Service) searchSimple(ctx context.Context, req Request, normalized stri
 		Tag:           optStr(req.Tag),
 		Category:      optStr(req.Category),
 		Language:      optStr(req.Language),
+		License:       optStr(req.License),
 		Off:           int32(offset),
 		Lim:           int32(limit + 1),
 	})
@@ -217,6 +219,7 @@ func (s *Service) searchSimple(ctx context.Context, req Request, normalized stri
 			Tag:           optStr(req.Tag),
 			Category:      optStr(req.Category),
 			Language:      optStr(req.Language),
+			License:       optStr(req.License),
 		})
 		if err != nil {
 			return Response{}, err

@@ -148,9 +148,10 @@ func TestSimpleCountSharesPageQueryPredicates(t *testing.T) {
 		{"tag", Request{Query: "golang", Tag: "go"}},
 		{"category", Request{Query: "golang", Category: "tech"}},
 		{"language", Request{Query: "golang", Language: "es"}},
+		{"license", Request{Query: "golang", License: "7"}},
 		{"every filter at once", Request{
 			Query: "golang", HideSensitive: true, Tag: "go", Category: "tech", Language: "es",
-			Limit: 5, Offset: 40,
+			License: "7", Limit: 5, Offset: 40,
 		}},
 	}
 	for _, tc := range reqs {
@@ -177,6 +178,9 @@ func TestSimpleCountSharesPageQueryPredicates(t *testing.T) {
 			}
 			if !sameOpt(page.Language, count.Language) {
 				t.Errorf("language: page %v vs count %v", optStrVal(page.Language), optStrVal(count.Language))
+			}
+			if !sameOpt(page.License, count.License) {
+				t.Errorf("license: page %v vs count %v", optStrVal(page.License), optStrVal(count.License))
 			}
 		})
 	}

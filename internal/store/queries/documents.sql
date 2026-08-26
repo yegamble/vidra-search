@@ -6,12 +6,12 @@
 -- so a later reconcile.end only suppresses rows the current run never touched.
 INSERT INTO search.documents (
     video_id, kind, channel_id, channel_handle, channel_name, owner_id,
-    title, description, tags, category, language, duration_seconds,
+    title, description, tags, category, language, license, duration_seconds,
     is_sensitive, eligible, suppressed_reason, views, likes,
     published_at, source_updated_at, indexed_at, reconcile_run_id
 ) VALUES (
     @video_id, @kind, @channel_id, @channel_handle, @channel_name, @owner_id,
-    @title, @description, @tags, @category, @language, @duration_seconds,
+    @title, @description, @tags, @category, @language, @license, @duration_seconds,
     @is_sensitive, @eligible, @suppressed_reason, @views, @likes,
     @published_at, @source_updated_at, now(), @reconcile_run_id
 )
@@ -26,6 +26,7 @@ ON CONFLICT (video_id) DO UPDATE SET
     tags              = EXCLUDED.tags,
     category          = EXCLUDED.category,
     language          = EXCLUDED.language,
+    license           = EXCLUDED.license,
     duration_seconds  = EXCLUDED.duration_seconds,
     is_sensitive      = EXCLUDED.is_sensitive,
     eligible          = EXCLUDED.eligible,
@@ -96,7 +97,7 @@ WHERE kind = 'local'
 
 -- name: GetDocument :one
 SELECT video_id, kind, channel_id, channel_handle, channel_name, owner_id,
-       title, description, tags, category, language, duration_seconds,
+       title, description, tags, category, language, license, duration_seconds,
        is_sensitive, eligible, suppressed_reason, views, likes,
        published_at, source_updated_at, indexed_at, reconcile_run_id
 FROM search.documents

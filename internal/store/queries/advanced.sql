@@ -51,6 +51,7 @@ LEFT JOIN search.query_video_engagement qve
 WHERE (sqlc.narg('tag')::text IS NULL OR sqlc.narg('tag') = ANY(d.tags))
   AND (sqlc.narg('category')::text IS NULL OR d.category = sqlc.narg('category'))
   AND (sqlc.narg('language')::text IS NULL OR d.language = sqlc.narg('language'))
+  AND (sqlc.narg('license')::text IS NULL OR d.license = sqlc.narg('license'))
 ORDER BY ts_rank DESC, d.views DESC, d.video_id
 LIMIT @lim::int;
 

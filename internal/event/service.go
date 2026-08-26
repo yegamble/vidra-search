@@ -562,6 +562,7 @@ func applyVideoUpsert(ctx context.Context, q *sqlcgen.Queries, v VideoDoc, recon
 		Tags:             tags,
 		Category:         v.Category,
 		Language:         v.Language,
+		License:          v.License,
 		DurationSeconds:  v.DurationSeconds,
 		IsSensitive:      v.IsSensitive,
 		Eligible:         eligible,
