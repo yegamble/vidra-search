@@ -62,6 +62,7 @@ type SearchDocument struct {
 	IndexedAt        time.Time          `json:"indexed_at"`
 	ReconcileRunID   pgtype.UUID        `json:"reconcile_run_id"`
 	Tsv              interface{}        `json:"tsv"`
+	License          *string            `json:"license"`
 }
 
 type SearchEventsInbox struct {

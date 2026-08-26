@@ -46,7 +46,7 @@ func (q *Queries) CountDocumentsByEligibility(ctx context.Context) ([]CountDocum
 
 const getDocument = `-- name: GetDocument :one
 SELECT video_id, kind, channel_id, channel_handle, channel_name, owner_id,
-       title, description, tags, category, language, duration_seconds,
+       title, description, tags, category, language, license, duration_seconds,
        is_sensitive, eligible, suppressed_reason, views, likes,
        published_at, source_updated_at, indexed_at, reconcile_run_id
 FROM search.documents
@@ -65,6 +65,7 @@ type GetDocumentRow struct {
 	Tags             []string           `json:"tags"`
 	Category         *string            `json:"category"`
 	Language         *string            `json:"language"`
+	License          *string            `json:"license"`
 	DurationSeconds  *int32             `json:"duration_seconds"`
 	IsSensitive      bool               `json:"is_sensitive"`
 	Eligible         bool               `json:"eligible"`
@@ -92,6 +93,7 @@ func (q *Queries) GetDocument(ctx context.Context, videoID uuid.UUID) (GetDocume
 		&i.Tags,
 		&i.Category,
 		&i.Language,
+		&i.License,
 		&i.DurationSeconds,
 		&i.IsSensitive,
 		&i.Eligible,
@@ -246,14 +248,14 @@ func (q *Queries) UpdateDocumentStats(ctx context.Context, arg UpdateDocumentSta
 const upsertDocument = `-- name: UpsertDocument :exec
 INSERT INTO search.documents (
     video_id, kind, channel_id, channel_handle, channel_name, owner_id,
-    title, description, tags, category, language, duration_seconds,
+    title, description, tags, category, language, license, duration_seconds,
     is_sensitive, eligible, suppressed_reason, views, likes,
     published_at, source_updated_at, indexed_at, reconcile_run_id
 ) VALUES (
     $1, $2, $3, $4, $5, $6,
-    $7, $8, $9, $10, $11, $12,
-    $13, $14, $15, $16, $17,
-    $18, $19, now(), $20
+    $7, $8, $9, $10, $11, $12, $13,
+    $14, $15, $16, $17, $18,
+    $19, $20, now(), $21
 )
 ON CONFLICT (video_id) DO UPDATE SET
     kind              = EXCLUDED.kind,
@@ -266,6 +268,7 @@ ON CONFLICT (video_id) DO UPDATE SET
     tags              = EXCLUDED.tags,
     category          = EXCLUDED.category,
     language          = EXCLUDED.language,
+    license           = EXCLUDED.license,
     duration_seconds  = EXCLUDED.duration_seconds,
     is_sensitive      = EXCLUDED.is_sensitive,
     eligible          = EXCLUDED.eligible,
@@ -290,6 +293,7 @@ type UpsertDocumentParams struct {
 	Tags             []string           `json:"tags"`
 	Category         *string            `json:"category"`
 	Language         *string            `json:"language"`
+	License          *string            `json:"license"`
 	DurationSeconds  *int32             `json:"duration_seconds"`
 	IsSensitive      bool               `json:"is_sensitive"`
 	Eligible         bool               `json:"eligible"`
@@ -319,6 +323,7 @@ func (q *Queries) UpsertDocument(ctx context.Context, arg UpsertDocumentParams) 
 		arg.Tags,
 		arg.Category,
 		arg.Language,
+		arg.License,
 		arg.DurationSeconds,
 		arg.IsSensitive,
 		arg.Eligible,

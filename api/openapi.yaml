@@ -140,6 +140,11 @@ paths:
           required: false
           schema:
             type: string
+        - name: license
+          in: query
+          required: false
+          schema:
+            type: string
         - name: hide_sensitive
           in: query
           required: false
@@ -609,7 +614,8 @@ components:
           minimum: 0
           description: >-
             Documents matching the query and the request's filters (eligibility,
-            hide_sensitive, tag, category, language), ignoring limit/offset.
+            hide_sensitive, tag, category, language, license), ignoring
+            limit/offset.
             Omitted only when skip_count=true — absent means "not computed",
             never "zero". In simple mode this is EXACT: it is a COUNT(*) over the
             same predicates the page query pages over, so

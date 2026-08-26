@@ -1,0 +1,14 @@
+-- license on search.documents: the video's licence taxonomy id, projected by
+-- vidra-core alongside category/language so search can filter on it.
+--
+-- Nullable with no backfill on purpose: core's reconcile sweep re-upserts every
+-- eligible local document at startup and then every SEARCH_RECONCILE_INTERVAL
+-- (24h), so the column fills itself after deploy. Until it does, a
+-- license-filtered search simply matches nothing, which is the same answer an
+-- unindexed filter would have given.
+--
+-- No index: the vocabulary is seven values, so an equality predicate on it is
+-- not selective enough to be worth one — it rides the existing eligibility and
+-- recency indexes the recall predicates already use, exactly like category and
+-- language do.
+ALTER TABLE search.documents ADD COLUMN license TEXT;

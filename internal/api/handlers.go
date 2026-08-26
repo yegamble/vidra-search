@@ -48,6 +48,7 @@ func (s *Server) handleSearch(c echo.Context) error {
 		Tag:           c.QueryParam("tag"),
 		Category:      c.QueryParam("category"),
 		Language:      c.QueryParam("language"),
+		License:       c.QueryParam("license"),
 		HideSensitive: qBool(c, "hide_sensitive"),
 		Mode:          c.QueryParam("mode"),
 		UserID:        c.QueryParam("user_id"),
