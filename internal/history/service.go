@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/vidra/vidra-search/internal/paging"
 	"github.com/vidra/vidra-search/internal/pgconv"
 	"github.com/vidra/vidra-search/internal/store"
 	"github.com/vidra/vidra-search/internal/store/sqlcgen"
@@ -47,10 +48,8 @@ func NewService(st *store.Store) *Service { return &Service{store: st} }
 
 // List returns a user's non-hidden history, most-recent first.
 func (s *Service) List(ctx context.Context, userID uuid.UUID, limit, offset int) (ListResponse, error) {
-	limit = clamp(limit)
-	if offset < 0 {
-		offset = 0
-	}
+	limit = paging.Limit(limit, defaultLimit, maxLimit)
+	offset = paging.Offset(offset)
 	rows, err := s.store.Queries().ListUserSearchHistory(ctx, sqlcgen.ListUserSearchHistoryParams{
 		UserID: userID, Lim: int32(limit), Off: int32(offset),
 	})
@@ -116,14 +115,4 @@ func (s *Service) inTx(ctx context.Context, fn func(*sqlcgen.Queries) error) err
 		return err
 	}
 	return tx.Commit(ctx)
-}
-
-func clamp(v int) int {
-	if v <= 0 {
-		return defaultLimit
-	}
-	if v > maxLimit {
-		return maxLimit
-	}
-	return v
 }

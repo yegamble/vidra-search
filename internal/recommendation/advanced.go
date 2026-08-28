@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/vidra/vidra-search/internal/experiment"
+	"github.com/vidra/vidra-search/internal/paging"
 	"github.com/vidra/vidra-search/internal/pgconv"
 	"github.com/vidra/vidra-search/internal/ranking"
 	"github.com/vidra/vidra-search/internal/store/sqlcgen"
@@ -104,7 +105,7 @@ const (
 // item_neighbors ∪ the simple sets ∪ session co-watch, reranked by affinity +
 // freshness + novelty, MMR-diversified, creator-capped, with an ε-greedy slot.
 func (s *Service) relatedAdvanced(ctx context.Context, req RelatedRequest) (Response, error) {
-	limit := clamp(req.Limit, defaultLimit, maxRelatedLimit)
+	limit := paging.Limit(req.Limit, defaultLimit, maxRelatedLimit)
 	resp := Response{Items: []Item{}, ModelVersion: AdvancedModelVersion}
 	s.attachExperiment(&resp, subjectOf(req.UserID, req.SessionID))
 
@@ -179,7 +180,7 @@ func (s *Service) relatedAdvanced(ctx context.Context, req RelatedRequest) (Resp
 // of the user's recent watches ∪ trending ∪ fresh ∪ popular-in-language ∪ session
 // co-watch, reranked and diversified like related, hiding already-watched videos.
 func (s *Service) homeAdvanced(ctx context.Context, req HomeRequest) (Response, error) {
-	limit := clamp(req.Limit, defaultLimit, maxHomeLimit)
+	limit := paging.Limit(req.Limit, defaultLimit, maxHomeLimit)
 	resp := Response{Items: []Item{}, ModelVersion: AdvancedModelVersion}
 	s.attachExperiment(&resp, subjectOf(req.UserID, req.SessionID))
 	fetch := int32(limit * 2)

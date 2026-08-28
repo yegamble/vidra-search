@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/vidra/vidra-search/internal/normalize"
+	"github.com/vidra/vidra-search/internal/paging"
 	"github.com/vidra/vidra-search/internal/ranking"
 	"github.com/vidra/vidra-search/internal/store/sqlcgen"
 )
@@ -164,7 +165,7 @@ func (s *Service) Suggest(ctx context.Context, req Request) Response {
 	if normalized == "" {
 		return resp
 	}
-	limit := clamp(req.Limit, defaultLimit, 1, maxLimit)
+	limit := paging.Limit(req.Limit, defaultLimit, maxLimit)
 	mode := req.Mode
 	if mode == "" {
 		mode = "simple"
@@ -338,17 +339,4 @@ func (s *Service) candidates(ctx context.Context, normalized string, req Request
 func likePrefix(normalized string) string {
 	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 	return r.Replace(normalized) + "%"
-}
-
-func clamp(v, def, lo, hi int) int {
-	if v == 0 {
-		return def
-	}
-	if v < lo {
-		return lo
-	}
-	if v > hi {
-		return hi
-	}
-	return v
 }

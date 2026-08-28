@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/vidra/vidra-search/internal/experiment"
+	"github.com/vidra/vidra-search/internal/paging"
 	"github.com/vidra/vidra-search/internal/pgconv"
 	"github.com/vidra/vidra-search/internal/ranking"
 	"github.com/vidra/vidra-search/internal/store/sqlcgen"
@@ -43,11 +44,8 @@ func (s *Service) searchAdvanced(ctx context.Context, req Request, normalized st
 
 	resp := Response{Query: req.Query, IDs: []Hit{}, ModelVersion: servedVersion, Experiment: assignment}
 
-	offset := req.Offset
-	if offset < 0 {
-		offset = 0
-	}
-	limit := clampLimit(req.Limit)
+	offset := paging.Offset(req.Offset)
+	limit := paging.Limit(req.Limit, defaultLimit, maxLimit)
 	// The recall window follows the requested page (see recallWindow): paging
 	// past the base block widens the recall instead of running off its end, which
 	// is what used to turn page ~26 into a permanently empty result set.
