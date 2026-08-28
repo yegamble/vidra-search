@@ -44,6 +44,13 @@ type Config struct {
 	HTTPShutdownTimeout time.Duration
 	// HTTPRequestTimeout bounds per-request handler work via a context deadline.
 	HTTPRequestTimeout time.Duration
+	// HTTPDrainDelay is how long this process keeps serving AFTER it has decided
+	// to stop: /readyz turns 503 immediately, the listener stays open for this
+	// long, and only then does the graceful shutdown begin. It is the window a
+	// load balancer needs to notice the instance is going away and take it out
+	// of rotation before the socket closes. 0 (the default) is right for a
+	// single-node install, where nothing is polling readiness.
+	HTTPDrainDelay time.Duration
 	// HTTPBodyLimit is the maximum accepted request body (Echo size string).
 	HTTPBodyLimit string
 
@@ -142,6 +149,9 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if cfg.HTTPRequestTimeout, err = getEnvDuration("HTTP_REQUEST_TIMEOUT", 10*time.Second); err != nil {
+		return nil, err
+	}
+	if cfg.HTTPDrainDelay, err = getEnvDuration("HTTP_DRAIN_DELAY", 0); err != nil {
 		return nil, err
 	}
 	if cfg.TrendCapWindow, err = getEnvDuration("SEARCH_TREND_CAP_WINDOW", time.Hour); err != nil {
@@ -267,6 +277,9 @@ func (c *Config) validate() error {
 	}
 	if c.HTTPRequestTimeout <= 0 {
 		return fmt.Errorf("config: HTTP_REQUEST_TIMEOUT must be positive")
+	}
+	if c.HTTPDrainDelay < 0 {
+		return fmt.Errorf("config: HTTP_DRAIN_DELAY must not be negative")
 	}
 	if _, err := bytes.Parse(c.HTTPBodyLimit); err != nil {
 		return fmt.Errorf("config: invalid HTTP_BODY_LIMIT %q: %w", c.HTTPBodyLimit, err)

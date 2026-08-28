@@ -10,6 +10,8 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -49,7 +51,35 @@ type Server struct {
 	rdb       Pinger
 	svcs      Services
 	startedAt time.Time
+
+	// draining is set by Drain() when the process has decided to stop serving,
+	// and is what makes /readyz answer 503 BEFORE the listener closes. It is the
+	// only signal a load balancer polling readiness can act on: a listener that
+	// is already closed produces connection refusals on requests the balancer
+	// had no reason not to send. Never cleared — a process that has begun
+	// shutting down does not come back.
+	draining atomic.Bool
+
+	// The /readyz result cache. Readiness is polled by every load balancer,
+	// orchestrator and uptime check in front of the instance, several times a
+	// minute forever, and each uncached probe spends a pooled DB connection plus
+	// a Redis round trip. Caching for readinessCacheTTL makes the cost
+	// independent of how many things are watching, at the price of reporting a
+	// dependency's state up to two seconds late — well inside the
+	// several-consecutive-failures threshold every balancer applies anyway.
+	readinessMu     sync.Mutex
+	readinessCached *readinessSnapshot
 }
+
+// Drain flips readiness to 503 without touching the listener, so a load
+// balancer stops routing here while the requests already in flight finish. It
+// is one-way; call it before Shutdown.
+func (s *Server) Drain() {
+	s.draining.Store(true)
+}
+
+// Draining reports whether Drain has been called.
+func (s *Server) Draining() bool { return s.draining.Load() }
 
 // New constructs the server: middleware stack, routes, and the central error
 // handler. metrics may be nil (METRICS_ENABLED=false); db/rdb may be nil (the
@@ -90,7 +120,9 @@ func New(cfg *config.Config, logger *slog.Logger, metrics *telemetry.Metrics, db
 // route enumerator).
 func (s *Server) Handler() *echo.Echo { return s.echo }
 
-// Start runs the HTTP server until ctx is cancelled, then gracefully shuts down.
+// Start runs the HTTP server until ctx is cancelled, then drains (readiness
+// goes 503 while the listener stays open for HTTP_DRAIN_DELAY) and gracefully
+// shuts down.
 func (s *Server) Start(ctx context.Context) error {
 	s.echo.Server.ReadTimeout = s.cfg.HTTPReadTimeout
 	s.echo.Server.WriteTimeout = s.cfg.HTTPWriteTimeout
@@ -106,10 +138,30 @@ func (s *Server) Start(ctx context.Context) error {
 	case err := <-errCh:
 		return err
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), s.cfg.HTTPShutdownTimeout)
-		defer cancel()
-		return s.echo.Shutdown(shutdownCtx)
 	}
+
+	// Phase one of shutdown: stop being READY while still SERVING. /readyz turns
+	// 503 immediately; every other route keeps working. Nothing changes for a
+	// single-node install, where HTTP_DRAIN_DELAY is 0 and the wait below
+	// returns at once.
+	//
+	// The delay is what a load balancer needs. It learns this replica is going
+	// away by polling readiness, so without a pause the sequence is "last health
+	// check passed → listener closed → the requests already in flight toward us
+	// are refused". With one, readiness goes red first and the balancer has
+	// HTTP_DRAIN_DELAY to take this instance out of rotation before the socket
+	// closes.
+	s.Drain()
+	if s.cfg.HTTPDrainDelay > 0 {
+		s.logger.Info("draining: /readyz now reports 503 while the listener stays open",
+			"drain_delay", s.cfg.HTTPDrainDelay.String())
+		timer := time.NewTimer(s.cfg.HTTPDrainDelay)
+		<-timer.C
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), s.cfg.HTTPShutdownTimeout)
+	defer cancel()
+	return s.echo.Shutdown(shutdownCtx)
 }
 
 func (s *Server) routes() {
