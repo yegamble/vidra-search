@@ -75,6 +75,11 @@ func TestLoadRejectsBadValues(t *testing.T) {
 		"bad port":       {"VIDRA_ENV": "development", "HTTP_PORT": "70000"},
 		"bad watch pct":  {"VIDRA_ENV": "development", "MEANINGFUL_WATCH_PCT": "200"},
 		"bad body limit": {"VIDRA_ENV": "development", "HTTP_BODY_LIMIT": "banana"},
+		// A non-empty but unparseable typed value must refuse to boot rather
+		// than silently fall back to the default: env files get generated, and
+		// a typo that boots the wrong configuration is worse than a crash.
+		"bad bool":     {"VIDRA_ENV": "development", "SEARCH_WORKERS_ENABLED": "yes-please"},
+		"bad duration": {"VIDRA_ENV": "development", "SEARCH_TRENDING_INTERVAL": "1 minute"},
 	}
 	for name, env := range cases {
 		t.Run(name, func(t *testing.T) {
