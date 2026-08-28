@@ -94,9 +94,12 @@ services:
       HTTP_PORT: "8080"
       DATABASE_URL: postgres://${POSTGRES_USER:-vidra_search}:${POSTGRES_PASSWORD:-vidra_search}@postgres:5432/${POSTGRES_DB:-vidra_search}?sslmode=disable
       REDIS_URL: redis://redis:6379/0
-      # Dev-only shared secret. NEVER commit a real value; a shared deployment
-      # sets INTERNAL_SECRET to a strong (>=32 byte) value.
-      INTERNAL_SECRET: ${INTERNAL_SECRET:-dev-insecure-internal-secret-change-me-0000}
+      # Shared HMAC secret for the internal API. A strong (>=32 byte) value
+      # must be set and never committed — this stack publishes the api on a
+      # host port, so a well-known fallback would let anything that can reach
+      # it forge internal-auth requests. Same fail-closed shape as the meta
+      # repo's SEARCH_INTERNAL_SECRET.  generate: openssl rand -hex 32
+      INTERNAL_SECRET: ${INTERNAL_SECRET:?INTERNAL_SECRET must be set — generate with openssl rand -hex 32}
       METRICS_ENABLED: ${METRICS_ENABLED:-true}
       LOG_FORMAT: ${LOG_FORMAT:-text}
     ports:

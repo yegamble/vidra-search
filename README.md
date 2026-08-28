@@ -123,6 +123,11 @@ docker run --rm -e DATABASE_URL=… \
 ```
 
 ```bash
+# INTERNAL_SECRET has no compose fallback (the api port is host-published, so
+# a well-known default would be forgeable by anything on the network). Compose
+# interpolates the whole file, so export it even for the deps-only path:
+export INTERNAL_SECRET=$(openssl rand -hex 32)
+
 # 1. Bring up the standalone stack (postgres :5433, redis :6380, api :8081)
 docker compose up --build
 
@@ -150,7 +155,7 @@ the next `docker compose up` re-migrates from scratch.
 |-----|---------|-------|
 | `DATABASE_URL` | dev DSN (`:5433`) | PostgreSQL DSN. Required in production. |
 | `REDIS_URL` | `redis://localhost:6380/0` | Redis URL. Required in production. |
-| `INTERNAL_SECRET` | dev value | HMAC secret. **Production: ≥32 bytes; the dev default is rejected.** |
+| `INTERNAL_SECRET` | dev value (bare `make run` only) | HMAC secret; the compose stack requires an explicit value (`openssl rand -hex 32`). **Production: ≥32 bytes; the dev default is rejected.** |
 | `HTTP_PORT` | `8080` | Listen port (compose maps host `8081`). |
 | `HTTP_HOST` | `0.0.0.0` | Bind address. |
 | `VIDRA_ENV` | `development` | `development` \| `test` \| `production`. |
