@@ -259,7 +259,7 @@ func (s *Service) relatedSimple(ctx context.Context, videoID uuid.UUID, limit in
 func (s *Service) homeSimple(ctx context.Context, limit int, hideSensitive bool, lang string) (Response, error) {
 	limit = paging.Limit(limit, defaultLimit, maxHomeLimit)
 	resp := Response{Items: []Item{}, ModelVersion: ModelVersion}
-	language := optStr(lang)
+	language := pgconv.OptStr(lang)
 	fetch := int32(limit * 2)
 
 	// Prefer the gated Redis trending list; fall back to SQL HN-gravity when it is
@@ -431,11 +431,4 @@ func nonNil(s []string) []string {
 		return []string{}
 	}
 	return s
-}
-
-func optStr(s string) *string {
-	if s == "" {
-		return nil
-	}
-	return &s
 }

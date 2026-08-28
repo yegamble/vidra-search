@@ -470,7 +470,7 @@ func (r *Runner) sessionizer(ctx context.Context) error {
 		}
 		queries = append(queries, QueryEvent{
 			ID: row.ID, NormalizedQuery: row.NormalizedQuery,
-			UserID: uuidPtr(row.UserID), SessionID: derefStr(row.SessionID), SubmittedAt: row.SubmittedAt,
+			UserID: uuidPtr(row.UserID), SessionID: pgconv.DerefStr(row.SessionID), SubmittedAt: row.SubmittedAt,
 		})
 	}
 	signalRows, err := q.ListEngagementSignals(ctx, sqlcgen.ListEngagementSignalsParams{FromTs: from, ToTs: time.Now()})
@@ -480,7 +480,7 @@ func (r *Runner) sessionizer(ctx context.Context) error {
 	signals := make([]Signal, 0, len(signalRows))
 	for _, s := range signalRows {
 		signals = append(signals, Signal{
-			SessionID: derefStr(s.SessionID), NormalizedQuery: derefStr(s.NormalizedQuery), OccurredAt: s.OccurredAt,
+			SessionID: pgconv.DerefStr(s.SessionID), NormalizedQuery: pgconv.DerefStr(s.NormalizedQuery), OccurredAt: s.OccurredAt,
 		})
 	}
 
@@ -662,13 +662,6 @@ func uuidPtr(v pgtype.UUID) *uuid.UUID {
 		return &id
 	}
 	return nil
-}
-
-func derefStr(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
 }
 
 func strPtr(s string) *string { return &s }

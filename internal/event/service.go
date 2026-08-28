@@ -354,7 +354,7 @@ func (s *Service) applyBehavioral(ctx context.Context, q *sqlcgen.Queries, ev En
 		nq := normalize.Normalize(p.Query)
 		display := strings.TrimSpace(p.Query)
 		if err := s.insertBehavior(ctx, q, ev, behaviorFields{
-			userID: p.UserID, sessionID: p.SessionID, normalizedQuery: nilIfEmpty(nq),
+			userID: p.UserID, sessionID: p.SessionID, normalizedQuery: pgconv.OptStr(nq),
 		}); err != nil {
 			return nil, err
 		}
@@ -375,7 +375,7 @@ func (s *Service) applyBehavioral(ctx context.Context, q *sqlcgen.Queries, ev En
 			}
 		}
 		var effects []redisEffect
-		if sid := derefStr(p.SessionID); sid != "" && nq != "" {
+		if sid := pgconv.DerefStr(p.SessionID); sid != "" && nq != "" {
 			effects = append(effects, redisEffect{kind: effSessionQuery, sessionID: sid, value: nq})
 		}
 		if nq != "" {
@@ -393,7 +393,7 @@ func (s *Service) applyBehavioral(ctx context.Context, q *sqlcgen.Queries, ev En
 			nq = normalize.Normalize(*p.Query)
 		}
 		if err := s.insertBehavior(ctx, q, ev, behaviorFields{
-			userID: p.UserID, sessionID: p.SessionID, normalizedQuery: nilIfEmpty(nq), videoID: &p.VideoID,
+			userID: p.UserID, sessionID: p.SessionID, normalizedQuery: pgconv.OptStr(nq), videoID: &p.VideoID,
 		}); err != nil {
 			return nil, err
 		}
@@ -403,7 +403,7 @@ func (s *Service) applyBehavioral(ctx context.Context, q *sqlcgen.Queries, ev En
 			}
 		}
 		var effects []redisEffect
-		if sid := derefStr(p.SessionID); sid != "" {
+		if sid := pgconv.DerefStr(p.SessionID); sid != "" {
 			effects = append(effects, redisEffect{kind: effSessionVideo, sessionID: sid, value: p.VideoID.String()})
 		}
 		effects = append(effects, redisEffect{kind: effTrend, domain: "v", item: p.VideoID.String(), subject: subjectOf(p.UserID, p.SessionID)})
@@ -442,7 +442,7 @@ func (s *Service) applyBehavioral(ctx context.Context, q *sqlcgen.Queries, ev En
 		}
 		nq := normalize.Normalize(p.Query)
 		return nil, s.insertBehavior(ctx, q, ev, behaviorFields{
-			userID: p.UserID, sessionID: p.SessionID, normalizedQuery: nilIfEmpty(nq),
+			userID: p.UserID, sessionID: p.SessionID, normalizedQuery: pgconv.OptStr(nq),
 			videoID: &p.VideoID, position: p.Position, modelVersion: p.ModelVersion,
 		})
 
@@ -456,7 +456,7 @@ func (s *Service) applyBehavioral(ctx context.Context, q *sqlcgen.Queries, ev En
 			nq = normalize.Normalize(*p.Query)
 		}
 		return nil, s.insertBehavior(ctx, q, ev, behaviorFields{
-			userID: p.UserID, sessionID: p.SessionID, normalizedQuery: nilIfEmpty(nq),
+			userID: p.UserID, sessionID: p.SessionID, normalizedQuery: pgconv.OptStr(nq),
 			videoID: &p.VideoID, position: p.Position, modelVersion: p.ModelVersion,
 		})
 
@@ -591,21 +591,7 @@ func subjectOf(userID *uuid.UUID, sessionID *string) string {
 	if userID != nil {
 		return userID.String()
 	}
-	return derefStr(sessionID)
-}
-
-func derefStr(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
-}
-
-func nilIfEmpty(s string) *string {
-	if s == "" {
-		return nil
-	}
-	return &s
+	return pgconv.DerefStr(sessionID)
 }
 
 // derefTimeNow returns *t, or the current time when t is nil.

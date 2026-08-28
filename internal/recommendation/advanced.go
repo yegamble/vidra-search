@@ -14,6 +14,7 @@ import (
 	"github.com/vidra/vidra-search/internal/paging"
 	"github.com/vidra/vidra-search/internal/pgconv"
 	"github.com/vidra/vidra-search/internal/ranking"
+	"github.com/vidra/vidra-search/internal/rankutil"
 	"github.com/vidra/vidra-search/internal/store/sqlcgen"
 )
 
@@ -107,7 +108,7 @@ const (
 func (s *Service) relatedAdvanced(ctx context.Context, req RelatedRequest) (Response, error) {
 	limit := paging.Limit(req.Limit, defaultLimit, maxRelatedLimit)
 	resp := Response{Items: []Item{}, ModelVersion: AdvancedModelVersion}
-	s.attachExperiment(&resp, subjectOf(req.UserID, req.SessionID))
+	s.attachExperiment(&resp, experiment.SubjectOf(req.UserID, req.SessionID))
 
 	seed, err := s.q.GetDocument(ctx, req.VideoID)
 	if err != nil {
@@ -168,7 +169,7 @@ func (s *Service) relatedAdvanced(ctx context.Context, req RelatedRequest) (Resp
 
 	// Related has no language preference (the exploration pool spans languages).
 	items, err := s.composeAdvanced(ctx, cs, limit, req.HideSensitive, req.UserID, req.Personalized,
-		"", subjectOf(req.UserID, req.SessionID))
+		"", experiment.SubjectOf(req.UserID, req.SessionID))
 	if err != nil {
 		return Response{}, err
 	}
@@ -182,7 +183,7 @@ func (s *Service) relatedAdvanced(ctx context.Context, req RelatedRequest) (Resp
 func (s *Service) homeAdvanced(ctx context.Context, req HomeRequest) (Response, error) {
 	limit := paging.Limit(req.Limit, defaultLimit, maxHomeLimit)
 	resp := Response{Items: []Item{}, ModelVersion: AdvancedModelVersion}
-	s.attachExperiment(&resp, subjectOf(req.UserID, req.SessionID))
+	s.attachExperiment(&resp, experiment.SubjectOf(req.UserID, req.SessionID))
 	fetch := int32(limit * 2)
 
 	cs := newCandidateSet()
@@ -213,7 +214,7 @@ func (s *Service) homeAdvanced(ctx context.Context, req HomeRequest) (Response, 
 
 	// Fresh + popular-in-language.
 	recent, err := s.q.HomeRecent(ctx, sqlcgen.HomeRecentParams{
-		HideSensitive: req.HideSensitive, Language: optStr(req.Lang), Lim: fetch,
+		HideSensitive: req.HideSensitive, Language: pgconv.OptStr(req.Lang), Lim: fetch,
 	})
 	if err != nil {
 		return Response{}, err
@@ -233,7 +234,7 @@ func (s *Service) homeAdvanced(ctx context.Context, req HomeRequest) (Response, 
 	s.addSessionCoWatch(ctx, cs, req.SessionID, limit)
 
 	items, err := s.composeAdvanced(ctx, cs, limit, req.HideSensitive, req.UserID, req.Personalized,
-		req.Lang, subjectOf(req.UserID, req.SessionID))
+		req.Lang, experiment.SubjectOf(req.UserID, req.SessionID))
 	if err != nil {
 		return Response{}, err
 	}
@@ -258,7 +259,7 @@ func (s *Service) homeTrendingCandidates(ctx context.Context, hideSensitive bool
 		return out
 	}
 	rows, err := s.q.HomeTrending(ctx, sqlcgen.HomeTrendingParams{
-		HideSensitive: hideSensitive, Language: optStr(lang), Lim: fetch,
+		HideSensitive: hideSensitive, Language: pgconv.OptStr(lang), Lim: fetch,
 	})
 	if err != nil {
 		return nil
@@ -275,7 +276,7 @@ func (s *Service) addSessionCoWatch(ctx context.Context, cs *candidateSet, sessi
 	if sessionID == "" || s.session == nil {
 		return
 	}
-	seeds := parseUUIDs(s.session.SessionVideos(ctx, sessionID))
+	seeds := rankutil.ParseUUIDs(s.session.SessionVideos(ctx, sessionID))
 	if len(seeds) == 0 {
 		return
 	}
@@ -314,7 +315,7 @@ func (s *Service) composeAdvanced(ctx context.Context, cs *candidateSet, limit i
 		c.eligible = true
 		c.channel = f.ChannelID
 		c.views = float64(f.Views)
-		c.ageDays = ageDaysOf(f.PublishedAt, f.SourceUpdatedAt, now)
+		c.ageDays = rankutil.AgeDays(f.PublishedAt, f.SourceUpdatedAt, now)
 		c.tokens = tokensOf(f.Tags, f.Category)
 		eligible = append(eligible, c)
 	}
@@ -429,7 +430,7 @@ func (s *Service) insertExploration(ctx context.Context, ordered []string, cs *c
 		return ordered
 	}
 	pool, err := s.q.FreshLowViewEligible(ctx, sqlcgen.FreshLowViewEligibleParams{
-		HideSensitive: hideSensitive, MaxViews: recFreshMaxViews, Language: optStr(lang), Lim: int32(limit * 2),
+		HideSensitive: hideSensitive, MaxViews: recFreshMaxViews, Language: pgconv.OptStr(lang), Lim: int32(limit * 2),
 	})
 	if err != nil || len(pool) == 0 {
 		return ordered
@@ -483,23 +484,6 @@ func (s *Service) attachExperiment(resp *Response, subject string) {
 
 // --- small helpers ---
 
-func subjectOf(userID, sessionID string) string {
-	if userID != "" {
-		return userID
-	}
-	return sessionID
-}
-
-func parseUUIDs(ss []string) []uuid.UUID {
-	out := make([]uuid.UUID, 0, len(ss))
-	for _, s := range ss {
-		if id, err := uuid.Parse(s); err == nil {
-			out = append(out, id)
-		}
-	}
-	return out
-}
-
 // tokensOf builds the MMR similarity token set: each tag plus a category token.
 func tokensOf(tags []string, category *string) map[string]struct{} {
 	m := make(map[string]struct{}, len(tags)+1)
@@ -511,19 +495,3 @@ func tokensOf(tags []string, category *string) map[string]struct{} {
 	}
 	return m
 }
-
-// ageDaysOf returns a document's age in days from published_at (falling back to
-// source_updated_at), clamped at 0.
-func ageDaysOf(publishedAt pgtype.Timestamptz, sourceUpdatedAt, now time.Time) float64 {
-	t := sourceUpdatedAt
-	if publishedAt.Valid {
-		t = publishedAt.Time
-	}
-	d := now.Sub(t).Hours() / 24
-	if d < 0 {
-		return 0
-	}
-	return d
-}
-
-var _ = experiment.Assignment{}

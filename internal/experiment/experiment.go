@@ -120,6 +120,18 @@ func (r *Registry) Assign(key, subject string) (Assignment, bool) {
 	return Assignment{}, false
 }
 
+// SubjectOf returns the experiment subject for a request: the user id when the
+// caller is signed in, else the session id, else "". Assign never buckets an
+// empty subject, so an anonymous session-less request carries no experiment
+// (§1.5). Preferring the user id keeps one person in one arm across their
+// devices and sessions, which is what makes the arms comparable.
+func SubjectOf(userID, sessionID string) string {
+	if userID != "" {
+		return userID
+	}
+	return sessionID
+}
+
 // Bucket is the deterministic assignment hash: fnv1a(salt + "\x00" + subject) %
 // 100. The NUL separator prevents (salt="a", subject="bc") colliding with
 // (salt="ab", subject="c"). Stable across processes and restarts.

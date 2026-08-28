@@ -159,3 +159,31 @@ func itoa(i int) string {
 	}
 	return string(b[pos:])
 }
+
+// The subject decides which arm a request lands in, so preferring the user id
+// is what keeps one person in one arm across their devices — and an empty
+// subject is what keeps an anonymous, session-less request out of every
+// experiment (Assign refuses it).
+func TestSubjectOf(t *testing.T) {
+	cases := []struct {
+		name      string
+		userID    string
+		sessionID string
+		want      string
+	}{
+		{"user wins", "u1", "s1", "u1"},
+		{"session when signed out", "", "s1", "s1"},
+		{"user alone", "u1", "", "u1"},
+		{"neither is unassignable", "", "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := SubjectOf(tc.userID, tc.sessionID); got != tc.want {
+				t.Errorf("SubjectOf(%q, %q) = %q, want %q", tc.userID, tc.sessionID, got, tc.want)
+			}
+		})
+	}
+	if _, ok := NewRegistry(nil, nil).Assign("any", SubjectOf("", "")); ok {
+		t.Error("an empty subject was assigned; §1.5 says such requests carry no experiment")
+	}
+}
