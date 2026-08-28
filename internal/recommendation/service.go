@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/vidra/vidra-search/internal/experiment"
+	"github.com/vidra/vidra-search/internal/paging"
 	"github.com/vidra/vidra-search/internal/pgconv"
 	"github.com/vidra/vidra-search/internal/ranking"
 	"github.com/vidra/vidra-search/internal/store/sqlcgen"
@@ -194,7 +195,7 @@ func (s *Service) Home(ctx context.Context, req HomeRequest) (Response, error) {
 // fill. Excludes the seed; respects eligibility + hide_sensitive; caps each
 // channel. A missing seed yields an empty feed.
 func (s *Service) relatedSimple(ctx context.Context, videoID uuid.UUID, limit int, hideSensitive bool) (Response, error) {
-	limit = clamp(limit, defaultLimit, maxRelatedLimit)
+	limit = paging.Limit(limit, defaultLimit, maxRelatedLimit)
 	resp := Response{Items: []Item{}, ModelVersion: ModelVersion}
 
 	seed, err := s.q.GetDocument(ctx, videoID)
@@ -256,9 +257,9 @@ func (s *Service) relatedSimple(ctx context.Context, videoID uuid.UUID, limit in
 // HN-gravity trending, fresh, and popular, interleaved so all three contribute,
 // with a per-channel cap.
 func (s *Service) homeSimple(ctx context.Context, limit int, hideSensitive bool, lang string) (Response, error) {
-	limit = clamp(limit, defaultLimit, maxHomeLimit)
+	limit = paging.Limit(limit, defaultLimit, maxHomeLimit)
 	resp := Response{Items: []Item{}, ModelVersion: ModelVersion}
-	language := optStr(lang)
+	language := pgconv.OptStr(lang)
 	fetch := int32(limit * 2)
 
 	// Prefer the gated Redis trending list; fall back to SQL HN-gravity when it is
@@ -425,26 +426,9 @@ func (c *composer) items() []Item {
 	return out
 }
 
-func clamp(v, def, max int) int {
-	if v <= 0 {
-		return def
-	}
-	if v > max {
-		return max
-	}
-	return v
-}
-
 func nonNil(s []string) []string {
 	if s == nil {
 		return []string{}
 	}
 	return s
-}
-
-func optStr(s string) *string {
-	if s == "" {
-		return nil
-	}
-	return &s
 }

@@ -14,6 +14,10 @@ import (
 // NewLogger constructs the process logger. level is debug|info|warn|error
 // (case-insensitive; empty = info); format is "json" (default) or "text". An
 // unrecognised level or format is an error so misconfiguration fails fast.
+//
+// TWIN: vidra-core internal/observability/logger.go — NewLogger + ParseLevel
+// are verbatim copies; both services' log lines have to parse the same way in
+// one aggregator.
 func NewLogger(w io.Writer, level, format string) (*slog.Logger, error) {
 	lvl, err := ParseLevel(level)
 	if err != nil {

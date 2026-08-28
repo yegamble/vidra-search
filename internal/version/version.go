@@ -9,6 +9,9 @@
 // self-describing even without ldflags.
 package version
 
+// TWIN: vidra-core internal/version/version.go — same shape, same ldflags
+// contract; only the -X import path differs.
+
 import "runtime"
 
 var (

@@ -5,11 +5,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/vidra/vidra-search/internal/experiment"
+	"github.com/vidra/vidra-search/internal/paging"
 	"github.com/vidra/vidra-search/internal/pgconv"
 	"github.com/vidra/vidra-search/internal/ranking"
+	"github.com/vidra/vidra-search/internal/rankutil"
 	"github.com/vidra/vidra-search/internal/store/sqlcgen"
 )
 
@@ -30,7 +31,7 @@ func (heuristicRanker) Version() string { return "heuristic-v1" }
 // to the deterministic text+engagement ordering.
 func (s *Service) searchAdvanced(ctx context.Context, req Request, normalized string) (Response, error) {
 	// Experiment assignment + ranker selection.
-	subject := subjectOf(req.UserID, req.SessionID)
+	subject := experiment.SubjectOf(req.UserID, req.SessionID)
 	var assignment *experiment.Assignment
 	wantVersion := ""
 	if s.exp != nil {
@@ -43,11 +44,8 @@ func (s *Service) searchAdvanced(ctx context.Context, req Request, normalized st
 
 	resp := Response{Query: req.Query, IDs: []Hit{}, ModelVersion: servedVersion, Experiment: assignment}
 
-	offset := req.Offset
-	if offset < 0 {
-		offset = 0
-	}
-	limit := clampLimit(req.Limit)
+	offset := paging.Offset(req.Offset)
+	limit := paging.Limit(req.Limit, defaultLimit, maxLimit)
 	// The recall window follows the requested page (see recallWindow): paging
 	// past the base block widens the recall instead of running off its end, which
 	// is what used to turn page ~26 into a permanently empty result set.
@@ -59,10 +57,10 @@ func (s *Service) searchAdvanced(ctx context.Context, req Request, normalized st
 	rows, err := s.q.SearchAdvancedRecall(ctx, sqlcgen.SearchAdvancedRecallParams{
 		Query:         normalized,
 		HideSensitive: req.HideSensitive,
-		Tag:           optStr(req.Tag),
-		Category:      optStr(req.Category),
-		Language:      optStr(req.Language),
-		License:       optStr(req.License),
+		Tag:           pgconv.OptStr(req.Tag),
+		Category:      pgconv.OptStr(req.Category),
+		Language:      pgconv.OptStr(req.Language),
+		License:       pgconv.OptStr(req.License),
 		Lim:           int32(window + 1),
 	})
 	if err != nil {
@@ -91,7 +89,7 @@ func (s *Service) searchAdvanced(ctx context.Context, req Request, normalized st
 			TrgmSim:           r.TrgmSim,
 			ExactFlags:        r.ExactFlags,
 			Views:             float64(r.Views),
-			AgeDays:           ageDays(r.PublishedAt, r.SourceUpdatedAt, now),
+			AgeDays:           rankutil.AgeDays(r.PublishedAt, r.SourceUpdatedAt, now),
 			Impressions:       float64(r.Impressions),
 			Clicks:            float64(r.Clicks),
 			MeaningfulWatches: float64(r.MeaningfulWatches),
@@ -177,6 +175,9 @@ func (s *Service) pickRanker(wantVersion string) (ranking.Ranker, string) {
 
 // applyPersonalAffinity fills the PersonalAffinity + ChannelAffinity features from
 // the user's watch projection (neighbour affinity) and channel affinity.
+//
+// docs and candIDs are index-aligned: searchAdvanced appends to both, once per
+// recall row, in the same loop. The channel lookup below relies on that.
 func (s *Service) applyPersonalAffinity(ctx context.Context, uid uuid.UUID, candIDs []uuid.UUID, channelOf map[uuid.UUID]uuid.UUID, docs []ranking.Doc) error {
 	affRows, err := s.q.NeighborAffinity(ctx, sqlcgen.NeighborAffinityParams{UserID: uid, Candidates: candIDs})
 	if err != nil {
@@ -208,7 +209,7 @@ func (s *Service) applyPersonalAffinity(ctx context.Context, uid uuid.UUID, cand
 // applySessionIntent fills the SessionIntent feature from the co-visitation
 // overlap of candidates with the session's recent videos.
 func (s *Service) applySessionIntent(ctx context.Context, sessionID string, candIDs []uuid.UUID, docs []ranking.Doc) error {
-	seeds := parseUUIDs(s.session.SessionVideos(ctx, sessionID))
+	seeds := rankutil.ParseUUIDs(s.session.SessionVideos(ctx, sessionID))
 	if len(seeds) == 0 {
 		return nil
 	}
@@ -224,37 +225,4 @@ func (s *Service) applySessionIntent(ctx context.Context, sessionID string, cand
 		docs[i].Features.SessionIntent = intent[docs[i].VideoID]
 	}
 	return nil
-}
-
-// ageDays returns the document's age in days from published_at (falling back to
-// source_updated_at), clamped at 0 for a future timestamp.
-func ageDays(publishedAt pgtype.Timestamptz, sourceUpdatedAt, now time.Time) float64 {
-	t := sourceUpdatedAt
-	if publishedAt.Valid {
-		t = publishedAt.Time
-	}
-	d := now.Sub(t).Hours() / 24
-	if d < 0 {
-		return 0
-	}
-	return d
-}
-
-// subjectOf returns the experiment subject: user id, else session id, else "".
-func subjectOf(userID, sessionID string) string {
-	if userID != "" {
-		return userID
-	}
-	return sessionID
-}
-
-// parseUUIDs parses a slice of id strings, dropping any that do not parse.
-func parseUUIDs(ss []string) []uuid.UUID {
-	out := make([]uuid.UUID, 0, len(ss))
-	for _, s := range ss {
-		if id, err := uuid.Parse(s); err == nil {
-			out = append(out, id)
-		}
-	}
-	return out
 }

@@ -18,6 +18,8 @@ import (
 
 	"github.com/vidra/vidra-search/internal/experiment"
 	"github.com/vidra/vidra-search/internal/normalize"
+	"github.com/vidra/vidra-search/internal/paging"
+	"github.com/vidra/vidra-search/internal/pgconv"
 	"github.com/vidra/vidra-search/internal/ranking"
 	"github.com/vidra/vidra-search/internal/store/sqlcgen"
 )
@@ -180,20 +182,17 @@ func (s *Service) Search(ctx context.Context, req Request) (Response, error) {
 // correct even when the caller skips the count.
 func (s *Service) searchSimple(ctx context.Context, req Request, normalized string) (Response, error) {
 	resp := Response{Query: req.Query, IDs: []Hit{}, ModelVersion: ModelVersion}
-	limit := clampLimit(req.Limit)
-	offset := req.Offset
-	if offset < 0 {
-		offset = 0
-	}
+	limit := paging.Limit(req.Limit, defaultLimit, maxLimit)
+	offset := paging.Offset(req.Offset)
 	// Ask for one row past the page. Its presence — not an inference from the
 	// count — is what makes HasMore exact.
 	rows, err := s.q.SearchSimple(ctx, sqlcgen.SearchSimpleParams{
 		Query:         normalized,
 		HideSensitive: req.HideSensitive,
-		Tag:           optStr(req.Tag),
-		Category:      optStr(req.Category),
-		Language:      optStr(req.Language),
-		License:       optStr(req.License),
+		Tag:           pgconv.OptStr(req.Tag),
+		Category:      pgconv.OptStr(req.Category),
+		Language:      pgconv.OptStr(req.Language),
+		License:       pgconv.OptStr(req.License),
 		Off:           int32(offset),
 		Lim:           int32(limit + 1),
 	})
@@ -216,10 +215,10 @@ func (s *Service) searchSimple(ctx context.Context, req Request, normalized stri
 		total, err := s.q.SearchSimpleCount(ctx, sqlcgen.SearchSimpleCountParams{
 			Query:         normalized,
 			HideSensitive: req.HideSensitive,
-			Tag:           optStr(req.Tag),
-			Category:      optStr(req.Category),
-			Language:      optStr(req.Language),
-			License:       optStr(req.License),
+			Tag:           pgconv.OptStr(req.Tag),
+			Category:      pgconv.OptStr(req.Category),
+			Language:      pgconv.OptStr(req.Language),
+			License:       pgconv.OptStr(req.License),
 		})
 		if err != nil {
 			return Response{}, err
@@ -231,21 +230,3 @@ func (s *Service) searchSimple(ctx context.Context, req Request, normalized stri
 
 // intPtr returns a pointer to v (Response.Total distinguishes 0 from "not computed").
 func intPtr(v int) *int { return &v }
-
-func clampLimit(v int) int {
-	if v <= 0 {
-		return defaultLimit
-	}
-	if v > maxLimit {
-		return maxLimit
-	}
-	return v
-}
-
-// optStr maps an empty filter to a nil (SQL NULL) optional parameter.
-func optStr(s string) *string {
-	if s == "" {
-		return nil
-	}
-	return &s
-}

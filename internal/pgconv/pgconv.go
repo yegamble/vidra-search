@@ -1,7 +1,8 @@
-// Package pgconv converts between plain Go values and the pgtype wrappers that
-// sqlc emits for nullable columns (nullable uuid → pgtype.UUID, nullable
-// timestamptz → pgtype.Timestamptz). Keeping the conversions in one place keeps
-// the event applier and query callers readable.
+// Package pgconv converts between plain Go values and the shapes sqlc emits for
+// nullable columns — the pgtype wrappers (nullable uuid → pgtype.UUID, nullable
+// timestamptz → pgtype.Timestamptz) and the plain pointers it uses for nullable
+// text. Keeping the conversions in one place keeps the event applier and query
+// callers readable.
 package pgconv
 
 import (
@@ -38,4 +39,23 @@ func UUIDValue(v pgtype.UUID) (uuid.UUID, bool) {
 		return uuid.Nil, false
 	}
 	return v.Bytes, true
+}
+
+// OptStr maps an empty string to a nil (SQL NULL) optional parameter, which is
+// how every optional text filter reaches sqlc: "" means "no filter", not "match
+// the empty string".
+func OptStr(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+// DerefStr reads an optional text column back as a plain string, NULL becoming
+// "". The inverse of OptStr.
+func DerefStr(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }

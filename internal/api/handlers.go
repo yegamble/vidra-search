@@ -66,9 +66,9 @@ func (s *Server) handleSearch(c echo.Context) error {
 
 // handleRelated serves GET /internal/v1/recommendations/related?video_id=...
 func (s *Server) handleRelated(c echo.Context) error {
-	videoID, err := uuid.Parse(c.QueryParam("video_id"))
+	videoID, err := queryUUID(c, "video_id")
 	if err != nil {
-		return newValidation("video_id", "must be a valid UUID")
+		return err
 	}
 	resp, err := s.svcs.Rec.Related(c.Request().Context(), recommendation.RelatedRequest{
 		VideoID:       videoID,
@@ -126,9 +126,9 @@ func (s *Server) handleEvents(c echo.Context) error {
 
 // handleGetSearchHistory serves GET /internal/v1/users/{user_id}/search-history.
 func (s *Server) handleGetSearchHistory(c echo.Context) error {
-	userID, err := uuid.Parse(c.Param("user_id"))
+	userID, err := pathUUID(c, "user_id")
 	if err != nil {
-		return newValidation("user_id", "must be a valid UUID")
+		return err
 	}
 	resp, err := s.svcs.History.List(c.Request().Context(), userID, qInt(c, "limit"), qInt(c, "offset"))
 	if err != nil {
@@ -140,9 +140,9 @@ func (s *Server) handleGetSearchHistory(c echo.Context) error {
 // handleClearSearchHistory serves DELETE /internal/v1/users/{user_id}/search-history:
 // clears the user's history and anonymizes their raw logs.
 func (s *Server) handleClearSearchHistory(c echo.Context) error {
-	userID, err := uuid.Parse(c.Param("user_id"))
+	userID, err := pathUUID(c, "user_id")
 	if err != nil {
-		return newValidation("user_id", "must be a valid UUID")
+		return err
 	}
 	if err := s.svcs.History.ClearAll(c.Request().Context(), userID); err != nil {
 		return err
@@ -155,9 +155,9 @@ func (s *Server) handleClearSearchHistory(c echo.Context) error {
 // already URL-decoded the path param, so it is used directly as the normalized
 // query key.
 func (s *Server) handleDeleteSearchHistoryEntry(c echo.Context) error {
-	userID, err := uuid.Parse(c.Param("user_id"))
+	userID, err := pathUUID(c, "user_id")
 	if err != nil {
-		return newValidation("user_id", "must be a valid UUID")
+		return err
 	}
 	normalizedQuery := c.Param("normalized_query")
 	if err := s.svcs.History.DeleteEntry(c.Request().Context(), userID, normalizedQuery); err != nil {
@@ -169,9 +169,9 @@ func (s *Server) handleDeleteSearchHistoryEntry(c echo.Context) error {
 // handleDeleteUser serves DELETE /internal/v1/users/{user_id}: a full privacy
 // purge (history, projections, anonymized logs).
 func (s *Server) handleDeleteUser(c echo.Context) error {
-	userID, err := uuid.Parse(c.Param("user_id"))
+	userID, err := pathUUID(c, "user_id")
 	if err != nil {
-		return newValidation("user_id", "must be a valid UUID")
+		return err
 	}
 	if err := s.svcs.History.PurgeUser(c.Request().Context(), userID); err != nil {
 		return err
@@ -179,7 +179,29 @@ func (s *Server) handleDeleteUser(c echo.Context) error {
 	return c.NoContent(http.StatusNoContent)
 }
 
-// --- query param helpers ---
+// --- param helpers ---
+
+// pathUUID parses a UUID path parameter, or returns the 422 validation error
+// naming the offending parameter. Every id in this API is a UUID, so the
+// parse-or-422 is the same four lines at every route; having one copy is what
+// keeps the field name in the error body consistent with the route template.
+func pathUUID(c echo.Context, name string) (uuid.UUID, error) {
+	id, err := uuid.Parse(c.Param(name))
+	if err != nil {
+		return uuid.Nil, newValidation(name, "must be a valid UUID")
+	}
+	return id, nil
+}
+
+// queryUUID is pathUUID for a required query parameter. Absent and malformed
+// are the same answer: a caller who did not name a video cannot be served one.
+func queryUUID(c echo.Context, name string) (uuid.UUID, error) {
+	id, err := uuid.Parse(c.QueryParam(name))
+	if err != nil {
+		return uuid.Nil, newValidation(name, "must be a valid UUID")
+	}
+	return id, nil
+}
 
 // qInt returns the integer query value, or 0 when absent/invalid (the service
 // layers then apply their own default + clamp).
