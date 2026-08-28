@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/labstack/echo/v4"
 )
@@ -125,5 +126,41 @@ func TestCodeForStatus(t *testing.T) {
 		if got := codeForStatus(status); got != want {
 			t.Errorf("codeForStatus(%d) = %q, want %q", status, got, want)
 		}
+	}
+}
+
+// A malformed id must reach the client as a named 422 field, not a 500 or a
+// generic 400 — that naming is the whole reason pathUUID/queryUUID exist.
+func TestUUIDParamValidation(t *testing.T) {
+	srv := New(testConfig(), nil, nil, nil, nil, Services{})
+	ts := time.Now().Unix()
+
+	cases := []struct {
+		name   string
+		method string
+		path   string
+		field  string
+	}{
+		{"path param", http.MethodDelete, "/internal/v1/users/not-a-uuid", "user_id"},
+		{"query param", http.MethodGet, "/internal/v1/recommendations/related?video_id=nope", "video_id"},
+		{"absent query param", http.MethodGet, "/internal/v1/recommendations/related", "video_id"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, tc.path, nil)
+			req.Header.Set(internalAuthHeader,
+				BuildInternalAuthHeader(testSecret, ts, tc.method, req.URL.Path))
+			code, body := errorEnvelope(t, srv, req)
+
+			if code != http.StatusUnprocessableEntity {
+				t.Fatalf("status = %d, want 422", code)
+			}
+			if body.Error.Code != "unprocessable_entity" {
+				t.Errorf("code = %q, want unprocessable_entity", body.Error.Code)
+			}
+			if len(body.Error.Fields) != 1 || body.Error.Fields[0].Field != tc.field {
+				t.Errorf("fields = %+v, want one naming %q", body.Error.Fields, tc.field)
+			}
+		})
 	}
 }
