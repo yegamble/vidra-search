@@ -1,0 +1,84 @@
+{
+  "protocol": "v1",
+  "_readme": [
+    "Golden vectors for the vidra internal-auth v1 HMAC protocol (X-Vidra-Internal-Auth).",
+    "Generated from vidra-search internal/api/auth.go, which is the canonical verifier.",
+    "expected_sig = hex(HMAC-SHA256(secret, ts + \"\\n\" + method + \"\\n\" + path)).",
+    "expected_header = \"v1:\" + ts + \":\" + expected_sig.",
+    "path is the DECODED path (Go's r.URL.Path), never the percent-encoded RequestURI.",
+    "The query string and the request body are NOT signed.",
+    "This file is shared: vidra-core's signer must reproduce it byte for byte. Copy it, do not re-derive it."
+  ],
+  "vectors": [
+    {
+      "name": "get_search",
+      "note": "The base case: hex HMAC-SHA256 over \"ts\\nMETHOD\\nPATH\".",
+      "secret": "test-internal-secret-at-least-32-bytes-long",
+      "ts": 1700000000,
+      "method": "GET",
+      "path": "/internal/v1/search",
+      "expected_sig": "f51ea18d3b24422beda9b5f21950082d8e6f5077f57706910427078f3b2c77d1",
+      "expected_header": "v1:1700000000:f51ea18d3b24422beda9b5f21950082d8e6f5077f57706910427078f3b2c77d1"
+    },
+    {
+      "name": "get_suggestions_same_ts",
+      "note": "Same secret and ts as get_search: the path is signed, so the signature must differ.",
+      "secret": "test-internal-secret-at-least-32-bytes-long",
+      "ts": 1700000000,
+      "method": "GET",
+      "path": "/internal/v1/suggestions",
+      "expected_sig": "15b4261ba927f003b7515323c300fad01feca6260e0741a765235678edc57cb5",
+      "expected_header": "v1:1700000000:15b4261ba927f003b7515323c300fad01feca6260e0741a765235678edc57cb5"
+    },
+    {
+      "name": "post_events",
+      "note": "The method is signed too. The body is NOT.",
+      "secret": "test-internal-secret-at-least-32-bytes-long",
+      "ts": 1700000000,
+      "method": "POST",
+      "path": "/internal/v1/events",
+      "expected_sig": "bba9de72cbefb76aecee42930e020c5eca22aa2dd6d7143ee83e54e9f0b41393",
+      "expected_header": "v1:1700000000:bba9de72cbefb76aecee42930e020c5eca22aa2dd6d7143ee83e54e9f0b41393"
+    },
+    {
+      "name": "different_secret",
+      "note": "get_search under a second secret; pins that the key is the HMAC key, not a salt.",
+      "secret": "another-test-secret-also-thirty-two-plus!!",
+      "ts": 1700000000,
+      "method": "GET",
+      "path": "/internal/v1/search",
+      "expected_sig": "149edbad4e0879d477253c73f50c27aa80a04def698dbcedcede3555560e6739",
+      "expected_header": "v1:1700000000:149edbad4e0879d477253c73f50c27aa80a04def698dbcedcede3555560e6739"
+    },
+    {
+      "name": "delete_history_entry_with_space",
+      "note": "DECODED path. The signer signs, and the verifier compares, r.URL.Path — NOT RequestURI. A caller that signs the percent-encoded form (hello%20world) will 401.",
+      "secret": "test-internal-secret-at-least-32-bytes-long",
+      "ts": 1735689600,
+      "method": "DELETE",
+      "path": "/internal/v1/users/3f2504e0-4f89-11d3-9a0c-0305e82c3301/search-history/hello world",
+      "expected_sig": "1f991b22e0bb2779546eb455b4391072c8f18b5969e2e7e0e1e9171504b14554",
+      "expected_header": "v1:1735689600:1f991b22e0bb2779546eb455b4391072c8f18b5969e2e7e0e1e9171504b14554"
+    },
+    {
+      "name": "delete_history_entry_cjk",
+      "note": "DECODED path with a multi-byte segment: the signature is over the UTF-8 bytes of the decoded path, so the wire form (%E6%97%A5...) never enters the HMAC.",
+      "secret": "test-internal-secret-at-least-32-bytes-long",
+      "ts": 1735689600,
+      "method": "DELETE",
+      "path": "/internal/v1/users/3f2504e0-4f89-11d3-9a0c-0305e82c3301/search-history/日本語 検索",
+      "expected_sig": "4ad1047a06cd427c04c8f8022c405b0bd927d6e7b6adee857b9e3f0f6dbed75b",
+      "expected_header": "v1:1735689600:4ad1047a06cd427c04c8f8022c405b0bd927d6e7b6adee857b9e3f0f6dbed75b"
+    },
+    {
+      "name": "epoch_zero",
+      "note": "ts is formatted as a base-10 int64 with no padding; 0 is \"0\".",
+      "secret": "test-internal-secret-at-least-32-bytes-long",
+      "ts": 0,
+      "method": "GET",
+      "path": "/internal/v1/search",
+      "expected_sig": "9d5976c5294b017c5e501d7827f60b5d215492e05e12bad470a9199e260335b7",
+      "expected_header": "v1:0:9d5976c5294b017c5e501d7827f60b5d215492e05e12bad470a9199e260335b7"
+    }
+  ]
+}
