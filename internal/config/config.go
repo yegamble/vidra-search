@@ -44,6 +44,13 @@ type Config struct {
 	HTTPShutdownTimeout time.Duration
 	// HTTPRequestTimeout bounds per-request handler work via a context deadline.
 	HTTPRequestTimeout time.Duration
+	// HTTPDrainDelay is how long this process keeps serving AFTER it has decided
+	// to stop: /readyz turns 503 immediately, the listener stays open for this
+	// long, and only then does the graceful shutdown begin. It is the window a
+	// load balancer needs to notice the instance is going away and take it out
+	// of rotation before the socket closes. 0 (the default) is right for a
+	// single-node install, where nothing is polling readiness.
+	HTTPDrainDelay time.Duration
 	// HTTPBodyLimit is the maximum accepted request body (Echo size string).
 	HTTPBodyLimit string
 
@@ -112,40 +119,75 @@ type Config struct {
 // docker-compose service addresses.
 func Load() (*Config, error) {
 	cfg := &Config{
-		Environment:         getEnv("VIDRA_ENV", "development"),
-		LogLevel:            strings.ToLower(getEnv("LOG_LEVEL", "info")),
-		LogFormat:           strings.ToLower(getEnv("LOG_FORMAT", "json")),
-		MetricsEnabled:      getEnvBool("METRICS_ENABLED", false),
-		HTTPHost:            getEnv("HTTP_HOST", "0.0.0.0"),
-		HTTPReadTimeout:     getEnvDuration("HTTP_READ_TIMEOUT", 15*time.Second),
-		HTTPWriteTimeout:    getEnvDuration("HTTP_WRITE_TIMEOUT", 30*time.Second),
-		HTTPShutdownTimeout: getEnvDuration("HTTP_SHUTDOWN_TIMEOUT", 20*time.Second),
-		HTTPRequestTimeout:  getEnvDuration("HTTP_REQUEST_TIMEOUT", 10*time.Second),
-		HTTPBodyLimit:       getEnv("HTTP_BODY_LIMIT", "2M"),
-		DatabaseURL:         getEnv("DATABASE_URL", defaultDatabaseURL),
-		RedisURL:            getEnv("REDIS_URL", "redis://localhost:6380/0"),
-		InternalSecret:      getEnv("INTERNAL_SECRET", devInternalSecret),
-
-		TrendCapWindow:         getEnvDuration("SEARCH_TREND_CAP_WINDOW", time.Hour),
-		WorkersEnabled:         getEnvBool("SEARCH_WORKERS_ENABLED", true),
-		RunJob:                 getEnv("SEARCH_RUN_JOB", ""),
-		AggregatesInterval:     getEnvDuration("SEARCH_AGGREGATES_INTERVAL", time.Minute),
-		EngagementInterval:     getEnvDuration("SEARCH_ENGAGEMENT_INTERVAL", 5*time.Minute),
-		SessionizerInterval:    getEnvDuration("SEARCH_SESSIONIZER_INTERVAL", 5*time.Minute),
-		TrendingInterval:       getEnvDuration("SEARCH_TRENDING_INTERVAL", time.Minute),
-		CovisInterval:          getEnvDuration("SEARCH_COVIS_INTERVAL", 15*time.Minute),
-		RetentionInterval:      getEnvDuration("SEARCH_RETENTION_INTERVAL", 24*time.Hour),
-		ReconcileGuardInterval: getEnvDuration("SEARCH_RECONCILE_GUARD_INTERVAL", 10*time.Minute),
-		ModelDir:               getEnv("MODEL_DIR", "/var/lib/vidra-search/models"),
-		ModelLoaderInterval:    getEnvDuration("SEARCH_MODEL_LOADER_INTERVAL", time.Minute),
-		ShadowEvalInterval:     getEnvDuration("SEARCH_SHADOW_EVAL_INTERVAL", time.Hour),
+		Environment:    getEnv("VIDRA_ENV", "development"),
+		LogLevel:       strings.ToLower(getEnv("LOG_LEVEL", "info")),
+		LogFormat:      strings.ToLower(getEnv("LOG_FORMAT", "json")),
+		HTTPHost:       getEnv("HTTP_HOST", "0.0.0.0"),
+		HTTPBodyLimit:  getEnv("HTTP_BODY_LIMIT", "2M"),
+		DatabaseURL:    getEnv("DATABASE_URL", defaultDatabaseURL),
+		RedisURL:       getEnv("REDIS_URL", "redis://localhost:6380/0"),
+		InternalSecret: getEnv("INTERNAL_SECRET", devInternalSecret),
+		RunJob:         getEnv("SEARCH_RUN_JOB", ""),
+		ModelDir:       getEnv("MODEL_DIR", "/var/lib/vidra-search/models"),
 	}
 
-	port, err := getEnvInt("HTTP_PORT", 8080)
-	if err != nil {
+	var err error
+	if cfg.MetricsEnabled, err = getEnvBool("METRICS_ENABLED", false); err != nil {
 		return nil, err
 	}
-	cfg.HTTPPort = port
+	if cfg.WorkersEnabled, err = getEnvBool("SEARCH_WORKERS_ENABLED", true); err != nil {
+		return nil, err
+	}
+
+	if cfg.HTTPReadTimeout, err = getEnvDuration("HTTP_READ_TIMEOUT", 15*time.Second); err != nil {
+		return nil, err
+	}
+	if cfg.HTTPWriteTimeout, err = getEnvDuration("HTTP_WRITE_TIMEOUT", 30*time.Second); err != nil {
+		return nil, err
+	}
+	if cfg.HTTPShutdownTimeout, err = getEnvDuration("HTTP_SHUTDOWN_TIMEOUT", 20*time.Second); err != nil {
+		return nil, err
+	}
+	if cfg.HTTPRequestTimeout, err = getEnvDuration("HTTP_REQUEST_TIMEOUT", 10*time.Second); err != nil {
+		return nil, err
+	}
+	if cfg.HTTPDrainDelay, err = getEnvDuration("HTTP_DRAIN_DELAY", 0); err != nil {
+		return nil, err
+	}
+	if cfg.TrendCapWindow, err = getEnvDuration("SEARCH_TREND_CAP_WINDOW", time.Hour); err != nil {
+		return nil, err
+	}
+	if cfg.AggregatesInterval, err = getEnvDuration("SEARCH_AGGREGATES_INTERVAL", time.Minute); err != nil {
+		return nil, err
+	}
+	if cfg.EngagementInterval, err = getEnvDuration("SEARCH_ENGAGEMENT_INTERVAL", 5*time.Minute); err != nil {
+		return nil, err
+	}
+	if cfg.SessionizerInterval, err = getEnvDuration("SEARCH_SESSIONIZER_INTERVAL", 5*time.Minute); err != nil {
+		return nil, err
+	}
+	if cfg.TrendingInterval, err = getEnvDuration("SEARCH_TRENDING_INTERVAL", time.Minute); err != nil {
+		return nil, err
+	}
+	if cfg.CovisInterval, err = getEnvDuration("SEARCH_COVIS_INTERVAL", 15*time.Minute); err != nil {
+		return nil, err
+	}
+	if cfg.RetentionInterval, err = getEnvDuration("SEARCH_RETENTION_INTERVAL", 24*time.Hour); err != nil {
+		return nil, err
+	}
+	if cfg.ReconcileGuardInterval, err = getEnvDuration("SEARCH_RECONCILE_GUARD_INTERVAL", 10*time.Minute); err != nil {
+		return nil, err
+	}
+	if cfg.ModelLoaderInterval, err = getEnvDuration("SEARCH_MODEL_LOADER_INTERVAL", time.Minute); err != nil {
+		return nil, err
+	}
+	if cfg.ShadowEvalInterval, err = getEnvDuration("SEARCH_SHADOW_EVAL_INTERVAL", time.Hour); err != nil {
+		return nil, err
+	}
+
+	if cfg.HTTPPort, err = getEnvInt("HTTP_PORT", 8080); err != nil {
+		return nil, err
+	}
 
 	if cfg.MinQueryUserCount, err = getEnvInt("MIN_QUERY_USER_COUNT", 3); err != nil {
 		return nil, err
@@ -236,6 +278,9 @@ func (c *Config) validate() error {
 	if c.HTTPRequestTimeout <= 0 {
 		return fmt.Errorf("config: HTTP_REQUEST_TIMEOUT must be positive")
 	}
+	if c.HTTPDrainDelay < 0 {
+		return fmt.Errorf("config: HTTP_DRAIN_DELAY must not be negative")
+	}
 	if _, err := bytes.Parse(c.HTTPBodyLimit); err != nil {
 		return fmt.Errorf("config: invalid HTTP_BODY_LIMIT %q: %w", c.HTTPBodyLimit, err)
 	}
@@ -307,6 +352,11 @@ func getEnv(key, def string) string {
 	return def
 }
 
+// The typed getters share one contract with vidra-core's envParser: an UNSET or
+// EMPTY variable means "use the default" (so `KEY=` in an env file is the same
+// as omitting KEY), but a non-empty value that does not parse is FATAL at config
+// load, never a silent fall-back. Env files are generated, and a typo must
+// refuse to boot rather than boot in the wrong configuration.
 func getEnvInt(key string, def int) (int, error) {
 	v, ok := os.LookupEnv(key)
 	if !ok || v == "" {
@@ -331,26 +381,26 @@ func getEnvFloat(key string, def float64) (float64, error) {
 	return f, nil
 }
 
-func getEnvBool(key string, def bool) bool {
+func getEnvBool(key string, def bool) (bool, error) {
 	v, ok := os.LookupEnv(key)
 	if !ok || v == "" {
-		return def
+		return def, nil
 	}
 	b, err := strconv.ParseBool(v)
 	if err != nil {
-		return def
+		return false, fmt.Errorf("config: %s must be a boolean: %w", key, err)
 	}
-	return b
+	return b, nil
 }
 
-func getEnvDuration(key string, def time.Duration) time.Duration {
+func getEnvDuration(key string, def time.Duration) (time.Duration, error) {
 	v, ok := os.LookupEnv(key)
 	if !ok || v == "" {
-		return def
+		return def, nil
 	}
 	d, err := time.ParseDuration(v)
 	if err != nil {
-		return def
+		return 0, fmt.Errorf("config: %s must be a duration (e.g. 30s, 5m): %w", key, err)
 	}
-	return d
+	return d, nil
 }

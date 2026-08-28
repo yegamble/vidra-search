@@ -72,6 +72,12 @@ func (s *Server) httpErrorHandler(err error, c echo.Context) {
 		if he.Internal != nil {
 			err = he.Internal
 		}
+		// 501 Not Implemented is a documented, client-safe response. Give it a
+		// stable code so its message survives the generic 5xx message-scrubbing
+		// below.
+		if status == http.StatusNotImplemented {
+			code = "not_implemented"
+		}
 	case errors.Is(err, context.DeadlineExceeded):
 		status = http.StatusServiceUnavailable
 		message = "the request timed out"
@@ -116,7 +122,10 @@ func writeError(c echo.Context, status int, code, message string) error {
 	return c.JSON(status, ErrorResponse{Error: ErrorBody{Code: code, Message: message, RequestID: reqID}})
 }
 
-// codeForStatus maps an HTTP status to a stable, snake_case error code.
+// codeForStatus maps an HTTP status to a stable, snake_case error code. Unknown
+// statuses fall back to a generic code derived from the class.
+//
+// TWIN: vidra-core internal/httpapi/errors.go codeForStatus — keep in sync.
 func codeForStatus(status int) string {
 	switch status {
 	case http.StatusBadRequest:
@@ -129,6 +138,8 @@ func codeForStatus(status int) string {
 		return "not_found"
 	case http.StatusMethodNotAllowed:
 		return "method_not_allowed"
+	case http.StatusConflict:
+		return "conflict"
 	case http.StatusRequestEntityTooLarge:
 		return "request_entity_too_large"
 	case http.StatusUnprocessableEntity:
@@ -137,6 +148,8 @@ func codeForStatus(status int) string {
 		return "rate_limited"
 	case http.StatusServiceUnavailable:
 		return "service_unavailable"
+	case http.StatusNotImplemented:
+		return "not_implemented"
 	case http.StatusInternalServerError:
 		return "internal_error"
 	}
