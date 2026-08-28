@@ -104,6 +104,10 @@ func NewMetrics() *Metrics {
 // ObserveRequest records one completed HTTP request. route MUST be the Echo
 // route template so cardinality stays bounded; an empty route folds to
 // "unmatched".
+//
+// TWIN: vidra-core internal/observability/metrics.go — ObserveRequest and
+// statusClass are verbatim copies, so one dashboard can query both services'
+// RED metrics with the same label set.
 func (m *Metrics) ObserveRequest(method, route string, status int, d time.Duration) {
 	if route == "" {
 		route = "unmatched"

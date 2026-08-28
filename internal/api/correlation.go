@@ -48,6 +48,12 @@ func correlationFromContext(c echo.Context) string {
 // sanitizeCorrelationID keeps only URL-safe token characters and bounds the
 // length, so an inbound header can never inject CR/LF into a response header or
 // arbitrary content into a log line.
+//
+// TWIN: vidra-core internal/httpapi/correlation.go — the allowed character set
+// and the length bound must match, or an id core accepts gets rewritten here
+// and the two halves of one trace stop joining. The surrounding middleware
+// deliberately differs: core threads the id through context.Context, search
+// keeps it on the Echo context.
 func sanitizeCorrelationID(s string) string {
 	if len(s) > maxCorrelationIDLen {
 		s = s[:maxCorrelationIDLen]

@@ -175,6 +175,9 @@ func (s *Service) pickRanker(wantVersion string) (ranking.Ranker, string) {
 
 // applyPersonalAffinity fills the PersonalAffinity + ChannelAffinity features from
 // the user's watch projection (neighbour affinity) and channel affinity.
+//
+// docs and candIDs are index-aligned: searchAdvanced appends to both, once per
+// recall row, in the same loop. The channel lookup below relies on that.
 func (s *Service) applyPersonalAffinity(ctx context.Context, uid uuid.UUID, candIDs []uuid.UUID, channelOf map[uuid.UUID]uuid.UUID, docs []ranking.Doc) error {
 	affRows, err := s.q.NeighborAffinity(ctx, sqlcgen.NeighborAffinityParams{UserID: uid, Candidates: candIDs})
 	if err != nil {
