@@ -224,10 +224,16 @@ type impressionPayload struct {
 	ModelVersion *string    `json:"model_version"`
 }
 
+// SubjectID is decoded here as well as on search.submitted because
+// video.play_started drives the "v" trending domain (the home feed's trending
+// lane). Core sets it on every anonymous event in the batch, not just searches;
+// leaving it undecoded here left video trending keyed on the forgeable
+// session_id after the query domain had been fixed.
 type playStartedPayload struct {
 	VideoID      uuid.UUID  `json:"video_id"`
 	UserID       *uuid.UUID `json:"user_id"`
 	SessionID    *string    `json:"session_id"`
+	SubjectID    *string    `json:"subject_id"`
 	Context      string     `json:"context"`
 	Query        *string    `json:"query"`
 	AllowHistory bool       `json:"allow_history"`

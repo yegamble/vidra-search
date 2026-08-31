@@ -379,7 +379,7 @@ func (s *Service) applyBehavioral(ctx context.Context, q *sqlcgen.Queries, ev En
 			effects = append(effects, redisEffect{kind: effSessionQuery, sessionID: sid, value: nq})
 		}
 		if nq != "" {
-			effects = append(effects, redisEffect{kind: effTrend, domain: "q", item: nq, subject: subjectOf(p.UserID, p.SessionID)})
+			effects = append(effects, redisEffect{kind: effTrend, domain: "q", item: nq, subject: subjectOf(p.UserID, p.SubjectID, p.SessionID)})
 		}
 		return effects, nil
 
@@ -406,7 +406,7 @@ func (s *Service) applyBehavioral(ctx context.Context, q *sqlcgen.Queries, ev En
 		if sid := pgconv.DerefStr(p.SessionID); sid != "" {
 			effects = append(effects, redisEffect{kind: effSessionVideo, sessionID: sid, value: p.VideoID.String()})
 		}
-		effects = append(effects, redisEffect{kind: effTrend, domain: "v", item: p.VideoID.String(), subject: subjectOf(p.UserID, p.SessionID)})
+		effects = append(effects, redisEffect{kind: effTrend, domain: "v", item: p.VideoID.String(), subject: subjectOf(p.UserID, p.SubjectID, p.SessionID)})
 		return effects, nil
 
 	case TypeVideoCompleted:
@@ -585,11 +585,40 @@ func eventTime(ev Envelope) time.Time {
 	return ev.OccurredAt
 }
 
-// subjectOf returns the id used for per-user trending caps + distinct-user HLL:
-// the user id when signed in, else the session id.
-func subjectOf(userID *uuid.UUID, sessionID *string) string {
+// subjectOf returns the id used for the per-subject trending cap and the
+// distinct-user HLL: the user id when signed in, else core's server-derived
+// subject_id, else the session id.
+//
+// The order is the k-anonymity floor's, for the same reason. session_id arrives
+// in the client-controlled X-Vidra-Session header and is validated for UUID shape
+// only, so one machine rotating it presented N identities to BOTH trending gates
+// at once: N distinct users in the HLL (clearing MIN_QUERY_USER_COUNT) and N
+// uncapped bumps of the ranking ZSET (the per-subject cap keys on this value).
+// Measured on a plausible traffic mix, that put an attacker's query at rank 1 of
+// the published trending list from a single request loop. subject_id is derived
+// in core from the connecting address, day-scoped, stripped from any client copy
+// and frozen at enqueue, so the client cannot choose it.
+//
+// The session fallback is deliberate and is NOT a hole an attacker can steer
+// into: core emits subject_id for every anonymous event whose address it can
+// derive, and a client cannot suppress that. It fires only where core has no
+// subject to give — a pre-0016 core, an install with no signing secret, an
+// unusual transport — and dropping it there would silently zero those installs'
+// trending instead. See docs/operations.md for the measurement that says when it
+// can go; it is not a calendar decision.
+//
+// What this does NOT close: the subject is address-derived, so a NAT, CGNAT or
+// campus egress is ONE contributor no matter how many real people sit behind it.
+// That under-counts and yields FEWER trending items, never more — but on a
+// ranking surface it is a real loss, and on an instance behind a proxy that does
+// not forward the client address it collapses the WHOLE audience into one subject
+// and empties trending. docs/operations.md names the symptom and the metric.
+func subjectOf(userID *uuid.UUID, subjectID, sessionID *string) string {
 	if userID != nil {
 		return userID.String()
+	}
+	if s := pgconv.DerefStr(subjectID); s != "" {
+		return s
 	}
 	return pgconv.DerefStr(sessionID)
 }

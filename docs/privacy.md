@@ -47,9 +47,12 @@ query becomes "suggestible" only once it has been issued by at least
 `MIN_QUERY_USER_COUNT` (default 3) **distinct users** (exact `COUNT(DISTINCT
 user_id)` over the retained window, plus, for rows with no `user_id`, the count of
 distinct anonymous **subjects** — `query_log.subject_id`). Trending applies the same distinct-user floor via HyperLogLog plus a
-Wilson lower-bound min-volume gate and a per-user contribution cap, so one user
-spamming a query 1000× yields `distinct_users = 1` and is neither suggestible nor
-trending (proven by `TestIntegrationManipulationResistance`).
+Wilson lower-bound min-volume gate and a per-subject contribution cap, and counts
+the **same** identity: the user id when signed in, else `subject_id`, else
+`session_id`. So one actor spamming a query 1000× yields `distinct_users = 1` and
+is neither suggestible nor trending, whether they are signed in or anonymous and
+rotating `X-Vidra-Session` (both proven by
+`TestIntegrationManipulationResistance`).
 
 `subject_id` is derived in vidra-core, not here: a keyed, day-scoped pseudonym of
 the connecting address, domain-separated from every other pseudonym core mints,
@@ -65,11 +68,17 @@ Two honest limits. Because the subject rotates daily, one determined anonymous
 actor can still reach a floor of 3 by searching on 3 different UTC days; the
 attack is not closed, its cost moves from three requests to three days. And
 because the subject is address-derived, a NAT/CGNAT/campus egress collapses many
-real people into one subject — which UNDER-counts and yields FEWER suggestions,
-never more. Rows carrying no subject (written before migration 0016, or anonymous
-requests whose address could not be derived) fall back to `session_id`; see
-`docs/operations.md` for the measurement that says when that fallback can be
-dropped.
+real people into one subject — which UNDER-counts and yields FEWER suggestions and
+FEWER trending items, never more. On trending that under-count is felt harder than
+on suggestions, because trending is a ranking surface with a hard distinct-user
+gate: a query genuinely popular behind one shared egress now fails the gate
+outright rather than ranking lower. That trade is taken knowingly — the identity
+that used to credit those people 25× is the same identity that credited an
+attacker 40×, and on the wire the two are indistinguishable. `docs/operations.md`
+names the symptom, the metric and the topology where it goes wrong. Rows carrying
+no subject (written before migration 0016, or anonymous requests whose address
+could not be derived) fall back to `session_id`; see `docs/operations.md` for the
+measurement that says when that fallback can be dropped.
 
 The threshold is **continuously re-checked, not latched**. The rollup only
 recomputes `suggestible` for queries carrying new traffic, and nothing prunes
