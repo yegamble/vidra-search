@@ -97,7 +97,8 @@ are idempotent.
 
 - `aggregates_rollup` (1m) — folds new `query_log` into `query_aggregates`
   (decay-then-increment `decayed_freq`, exact distinct-user recount, suggestible
-  flag).
+  flag). The recount counts distinct `user_id`s plus, for anonymous rows, distinct
+  `subject_id`s — see "The anonymous distinct-user floor" below.
 - `engagement_rollup` (5m) — derives `video.meaningful_watch` from qualifying
   `video.watch_progress`, folds impressions/clicks/meaningful-watches into
   `query_video_engagement`, and applies the meaningful-watch projection weight.
@@ -364,6 +365,53 @@ SELECT version, status, activated_at FROM search.models WHERE kind='ranker' ORDE
     FROM search.query_aggregates
     WHERE suggestible AND NOT banned ORDER BY decayed_freq DESC LIMIT 100;
     ```
+- **The anonymous distinct-user floor** (`query_log.subject_id`, migration 0016).
+  The floor that promotes a query into instance-wide autosuggest counts distinct
+  `user_id`s plus, for rows with no `user_id`, distinct anonymous subjects:
+  ```sql
+  count(DISTINCT ql.user_id)
+    + count(DISTINCT CASE WHEN ql.user_id IS NULL THEN COALESCE(ql.subject_id, ql.session_id) END)
+  ```
+  `subject_id` is derived by vidra-core (keyed, day-scoped, address-based, never
+  client-supplied); `session_id` comes from a client header and is therefore
+  forgeable, which is the hole this closes.
+  - **The `COALESCE` is the transition, and it is deliberate.** Every `query_log`
+    row written before 0016 has `subject_id IS NULL`. Counting the subject alone
+    would drop their evidence the moment the column landed, and the nightly
+    `suggestible_reeval` pass — which re-applies the floor to EVERY aggregate row
+    — would then un-suggest the instance's whole autosuggest corpus in one sweep.
+    The fallback keeps those rows counting exactly as they did before; they age
+    out on their own at `EVENT_RETENTION_DAYS` / `search_event_retention_days`
+    (default 90), so the hole closes gradually instead of at a cliff.
+  - **No deploy-ordering constraint.** The column is nullable with no backfill, so
+    search may be deployed before or after the core release that emits
+    `subject_id`. Deploy search first and nothing changes until core catches up;
+    deploy core first and the field is simply ignored by the older search.
+  - **When can the `COALESCE` be dropped?** Not on a date — on a measurement. Drop
+    it only once the share of anonymous rows carrying no subject is negligible on
+    YOUR instance, because core deliberately emits no subject when it cannot
+    derive one (an unusual transport, a malformed `RemoteAddr`, or an install with
+    no signing secret), and those rows would then count zero:
+    ```sql
+    SELECT count(*) FILTER (WHERE subject_id IS NULL) AS no_subject,
+           count(*)                                    AS anonymous_rows,
+           round(100.0 * count(*) FILTER (WHERE subject_id IS NULL)
+                       / NULLIF(count(*), 0), 2)       AS pct_no_subject
+    FROM search.query_log
+    WHERE user_id IS NULL AND submitted_at >= now() - interval '7 days';
+    ```
+    A `pct_no_subject` that stays near 0 for a full retention window means the
+    fallback is dead weight and the `COALESCE` can go. A `pct_no_subject` that
+    stays high means core cannot derive subjects on your topology — fix that
+    first; dropping the fallback there would silently stop counting your anonymous
+    traffic and thin autosuggest with nothing in the logs to explain it.
+  - **Both queries must move together.** `rollups.sql` and `reevaluation.sql`
+    carry the counting expression byte-for-byte identically, on purpose: the
+    re-evaluation pass is the rollup's recount with the batch `INNER JOIN`
+    removed. Change one and not the other and `suggestible` flaps — every row one
+    pass moves, the other moves back, on every cycle.
+    `TestFloorPredicateIsSharedByRollupAndReevaluation` fails the build on a
+    one-sided edit.
 - **Regenerate typed queries** after a SQL change: `make sqlc` then commit
   `internal/store/sqlcgen`; `make sqlc-verify` guards drift in CI.
 - **Reseed a load-test corpus**: `COUNT=100000 make seed-loadtest`.

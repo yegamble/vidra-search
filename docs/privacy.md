@@ -45,11 +45,31 @@ the flag — they carry no durable per-user projection and are anonymized/pruned
 A rare, personal query never becomes a globally-suggested phrase: a normalized
 query becomes "suggestible" only once it has been issued by at least
 `MIN_QUERY_USER_COUNT` (default 3) **distinct users** (exact `COUNT(DISTINCT
-user_id)` over the retained window, with a session fallback for anonymous
-traffic). Trending applies the same distinct-user floor via HyperLogLog plus a
+user_id)` over the retained window, plus, for rows with no `user_id`, the count of
+distinct anonymous **subjects** — `query_log.subject_id`). Trending applies the same distinct-user floor via HyperLogLog plus a
 Wilson lower-bound min-volume gate and a per-user contribution cap, so one user
 spamming a query 1000× yields `distinct_users = 1` and is neither suggestible nor
 trending (proven by `TestIntegrationManipulationResistance`).
+
+`subject_id` is derived in vidra-core, not here: a keyed, day-scoped pseudonym of
+the connecting address, domain-separated from every other pseudonym core mints,
+set only on ANONYMOUS events, stripped from any client-supplied copy, and frozen
+into the outbox payload at enqueue so a replay or a second drainer replica
+re-sends the identical value. The service stores the pseudonym and never sees an
+address. It exists because the previous anonymous identity was `session_id`, which
+arrives in a client-controlled header validated for UUID shape only — one client
+rotating that header minted unlimited identities and cleared a floor of 3 from a
+single request loop.
+
+Two honest limits. Because the subject rotates daily, one determined anonymous
+actor can still reach a floor of 3 by searching on 3 different UTC days; the
+attack is not closed, its cost moves from three requests to three days. And
+because the subject is address-derived, a NAT/CGNAT/campus egress collapses many
+real people into one subject — which UNDER-counts and yields FEWER suggestions,
+never more. Rows carrying no subject (written before migration 0016, or anonymous
+requests whose address could not be derived) fall back to `session_id`; see
+`docs/operations.md` for the measurement that says when that fallback can be
+dropped.
 
 The threshold is **continuously re-checked, not latched**. The rollup only
 recomputes `suggestible` for queries carrying new traffic, and nothing prunes

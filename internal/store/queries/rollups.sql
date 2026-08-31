@@ -24,9 +24,20 @@ SELECT COALESCE(max(id), 0)::bigint FROM search.query_log WHERE submitted_at <= 
 -- name: RollupQueryAggregates :exec
 -- Fold new query_log rows (id in (cursor, maxid]) into query_aggregates.
 -- decayed_freq is decay-then-increment (half-life from config); distinct_users is
--- an EXACT recount over the retained window (distinct user_id + session fallback);
--- display_query is the most recent display form; suggestible clears the min
--- distinct-user threshold and is never true for a banned query.
+-- an EXACT recount over the retained window (distinct user_id + anonymous
+-- subject); display_query is the most recent display form; suggestible clears the
+-- min distinct-user threshold and is never true for a banned query.
+--
+-- The anonymous half of that floor counts subject_id — core's server-derived,
+-- day-scoped, address-keyed pseudonym — because session_id is a client-supplied
+-- header, so rotating it minted unlimited identities and cleared the default
+-- floor of 3 from one request loop. COALESCE keeps session_id as the fallback for
+-- rows that carry no subject: every row written before migration 0016 has
+-- subject_id IS NULL, and counting the subject alone would drop their evidence
+-- the moment the column landed — the daily re-evaluation pass would then
+-- un-suggest an instance's whole autosuggest corpus in one sweep. Those rows age
+-- out at the retention horizon; see docs/operations.md for the measurement that
+-- says when the COALESCE can be dropped.
 WITH batch AS (
     SELECT ql.normalized_query,
            count(*)             AS delta,
@@ -38,11 +49,20 @@ WITH batch AS (
 ),
 recount AS (
     -- Exact distinct users: count(DISTINCT user_id) ignores NULLs automatically;
-    -- anonymous rows fall back to their distinct session_id. FILTER is avoided
-    -- deliberately (it trips sqlc 1.31.1's named-parameter editor here).
+    -- anonymous rows count core's server-derived subject_id, falling back to
+    -- session_id only when the row carries no subject (see the note above
+    -- RollupQueryAggregates). FILTER is avoided deliberately (it trips sqlc
+    -- 1.31.1's named-parameter editor here).
+    --
+    -- THIS EXPRESSION IS SHARED. reevaluation.sql applies the identical count
+    -- with the batch INNER JOIN removed, so the rollup and the daily
+    -- re-evaluation pass can never disagree. Change it here, change it there,
+    -- in the same commit — a divergence makes `suggestible` flap between the two
+    -- passes on every cycle. TestIntegrationRollupAndReevaluationAgreeOnSubjects
+    -- and TestFloorPredicateIsSharedByRollupAndReevaluation pin that.
     SELECT b.normalized_query,
            (count(DISTINCT ql.user_id)
-              + count(DISTINCT CASE WHEN ql.user_id IS NULL THEN ql.session_id END))::int AS distinct_users
+              + count(DISTINCT CASE WHEN ql.user_id IS NULL THEN COALESCE(ql.subject_id, ql.session_id) END))::int AS distinct_users
     FROM batch b
     JOIN search.query_log ql ON ql.normalized_query = b.normalized_query
         AND ql.submitted_at >= @window_start

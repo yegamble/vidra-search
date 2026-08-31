@@ -188,10 +188,19 @@ type userHistoryDeletedPayload struct {
 // user_watch_projection) only — the raw query_log/behavior_events ledgers,
 // ephemeral session context, and global trending are populated regardless (§1.5).
 
+// SubjectID is core's server-derived anonymous aggregation subject: an
+// address-keyed, day-scoped pseudonym set ONLY on anonymous events (an
+// authenticated event carries user_id instead) and stripped from any
+// client-supplied copy before enqueue. It is the identity the distinct-user
+// floor counts for rows with no user_id, because session_id arrives in a
+// client-controlled header. It may legitimately be absent — a pre-0016 core, or
+// an anonymous request whose address could not be derived — in which case the
+// floor falls back to session_id.
 type searchSubmittedPayload struct {
 	Query        string     `json:"query"`
 	UserID       *uuid.UUID `json:"user_id"`
 	SessionID    *string    `json:"session_id"`
+	SubjectID    *string    `json:"subject_id"`
 	ResultsCount *int32     `json:"results_count"`
 	Source       string     `json:"source"`
 	AllowHistory bool       `json:"allow_history"`

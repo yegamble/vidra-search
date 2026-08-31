@@ -361,7 +361,7 @@ func (s *Service) applyBehavioral(ctx context.Context, q *sqlcgen.Queries, ev En
 		if nq != "" {
 			if err := q.AppendQueryLog(ctx, sqlcgen.AppendQueryLogParams{
 				EventID: pgconv.UUID(ev.EventID), NormalizedQuery: nq, DisplayQuery: display,
-				UserID: pgconv.UUIDPtr(p.UserID), SessionID: p.SessionID,
+				UserID: pgconv.UUIDPtr(p.UserID), SessionID: p.SessionID, SubjectID: p.SubjectID,
 				ResultsCount: p.ResultsCount, SubmittedAt: eventTime(ev),
 			}); err != nil {
 				return nil, err

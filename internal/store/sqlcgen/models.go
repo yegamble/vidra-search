@@ -121,6 +121,7 @@ type SearchQueryLog struct {
 	SessionID       *string     `json:"session_id"`
 	ResultsCount    *int32      `json:"results_count"`
 	SubmittedAt     time.Time   `json:"submitted_at"`
+	SubjectID       *string     `json:"subject_id"`
 }
 
 type SearchQueryVideoEngagement struct {

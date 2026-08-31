@@ -15,9 +15,9 @@ import (
 
 const appendQueryLog = `-- name: AppendQueryLog :exec
 INSERT INTO search.query_log
-    (event_id, normalized_query, display_query, user_id, session_id, results_count, submitted_at)
+    (event_id, normalized_query, display_query, user_id, session_id, subject_id, results_count, submitted_at)
 VALUES
-    ($1, $2, $3, $4, $5, $6, $7)
+    ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT (event_id) DO NOTHING
 `
 
@@ -27,13 +27,17 @@ type AppendQueryLogParams struct {
 	DisplayQuery    string      `json:"display_query"`
 	UserID          pgtype.UUID `json:"user_id"`
 	SessionID       *string     `json:"session_id"`
+	SubjectID       *string     `json:"subject_id"`
 	ResultsCount    *int32      `json:"results_count"`
 	SubmittedAt     time.Time   `json:"submitted_at"`
 }
 
 // One raw query_log row per search.submitted. Deduped on event_id so a replayed
 // batch does not double-count. user_id is retained for exact distinct-user
-// counting (NULLed on history deletion).
+// counting (NULLed on history deletion). subject_id is core's server-derived
+// anonymous aggregation subject — present only on anonymous events, frozen into
+// the outbox payload at enqueue, and never client-supplied — and is what the
+// distinct-user floor counts for rows with no user_id.
 func (q *Queries) AppendQueryLog(ctx context.Context, arg AppendQueryLogParams) error {
 	_, err := q.db.Exec(ctx, appendQueryLog,
 		arg.EventID,
@@ -41,6 +45,7 @@ func (q *Queries) AppendQueryLog(ctx context.Context, arg AppendQueryLogParams) 
 		arg.DisplayQuery,
 		arg.UserID,
 		arg.SessionID,
+		arg.SubjectID,
 		arg.ResultsCount,
 		arg.SubmittedAt,
 	)
