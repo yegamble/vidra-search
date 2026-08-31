@@ -1,0 +1,31 @@
+-- 0016: the anonymous aggregation subject on search.query_log.
+--
+-- The k-anonymity floor deciding whether a normalized query becomes instance-wide
+-- autosuggest counts distinct user_ids plus, for rows with no user_id, a fallback
+-- identifier. That fallback was session_id, which arrives in the client's
+-- X-Vidra-Session header and is validated for UUID SHAPE only — so one client
+-- rotating the header minted N well-formed identities and cleared the default
+-- floor of 3 from a single request loop.
+--
+-- vidra-core now derives subject_id server-side for ANONYMOUS callers
+-- (address-keyed, day-scoped, domain-separated, and frozen into the outbox
+-- payload at enqueue so a drainer retry or a second replica re-sends the
+-- identical value — a replay can never add a distinct subject to the floor).
+-- Authenticated events carry user_id and no subject_id; user_id is already the
+-- trustworthy subject and an address-derived value beside a known account id
+-- would be both redundant and a leak.
+--
+-- NULLABLE, no default, no backfill: this is a catalog-only ALTER, which matters
+-- because query_log holds the full retention window (default 90 days) of search
+-- traffic and a rewrite would lock it for the length of that rewrite. Every
+-- pre-existing row keeps subject_id IS NULL and keeps counting through the
+-- session fallback (see the COALESCE in rollups.sql / reevaluation.sql), so no
+-- aggregate loses its evidence the moment this lands.
+--
+-- NO INDEX, deliberately. Both readers — the rollup's `recount` CTE and the
+-- re-evaluation pass's `survivors` CTE — mention subject_id only inside an
+-- aggregate over rows already selected by submitted_at and normalized_query,
+-- which the existing query_log_submitted_at_idx and query_log_normalized_query_idx
+-- serve. There is no predicate, join or ORDER BY on subject_id anywhere, so an
+-- index would be a full build over the retention window that no plan would use.
+ALTER TABLE search.query_log ADD COLUMN subject_id TEXT;

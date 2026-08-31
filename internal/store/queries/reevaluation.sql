@@ -14,9 +14,19 @@
 --
 -- The predicate below is deliberately the SAME predicate rollups.sql applies
 -- (`distinct_users >= min_users AND NOT banned`, counted over the same retention
--- window with the same anonymous session fallback). This pass is the rollup's
--- recount with the INNER JOIN removed — not a second, competing policy — so the
--- two can never disagree and the flag cannot flap between them.
+-- window with the same anonymous subject, and the same session fallback for rows
+-- carrying no subject). This pass is the rollup's recount with the INNER JOIN
+-- removed — not a second, competing policy — so the two can never disagree and
+-- the flag cannot flap between them.
+--
+-- That sharing is load-bearing and it is easy to break by halves. This pass is
+-- what re-applies the floor to EVERY aggregate row, so it is also where a
+-- one-sided edit does its damage: give the rollup a stricter count than this one
+-- and every row the rollup demotes is promoted straight back the next night, for
+-- ever. Both files carry the same counting expression byte-for-byte;
+-- TestFloorPredicateIsSharedByRollupAndReevaluation asserts that at the source
+-- level and TestIntegrationRollupAndReevaluationAgreeOnSubjects asserts it
+-- behaviourally, on a fixture that straddles the floor in both directions.
 
 -- name: QueryLogHasRowsInWindow :one
 -- Reconcile-orphan guard. This repo already learned that a repair pass which
@@ -37,11 +47,13 @@ SELECT EXISTS (
 -- OFFSET so a full count over a large table is a bounded forward sweep.
 WITH survivors AS (
     -- Exact distinct users over the retained window, mirroring rollups.sql:
-    -- count(DISTINCT user_id) ignores NULLs, anonymous rows fall back to their
-    -- distinct session_id.
+    -- count(DISTINCT user_id) ignores NULLs, anonymous rows count core's
+    -- server-derived subject_id and fall back to session_id only when the row
+    -- carries no subject. THIS EXPRESSION IS SHARED WITH rollups.sql — change
+    -- both or neither.
     SELECT ql.normalized_query,
            (count(DISTINCT ql.user_id)
-              + count(DISTINCT CASE WHEN ql.user_id IS NULL THEN ql.session_id END))::int AS distinct_users
+              + count(DISTINCT CASE WHEN ql.user_id IS NULL THEN COALESCE(ql.subject_id, ql.session_id) END))::int AS distinct_users
     FROM search.query_log ql
     WHERE ql.submitted_at >= @window_start AND ql.normalized_query <> ''
     GROUP BY ql.normalized_query
@@ -74,7 +86,7 @@ LIMIT @lim::int;
 WITH survivors AS (
     SELECT ql.normalized_query,
            (count(DISTINCT ql.user_id)
-              + count(DISTINCT CASE WHEN ql.user_id IS NULL THEN ql.session_id END))::int AS distinct_users
+              + count(DISTINCT CASE WHEN ql.user_id IS NULL THEN COALESCE(ql.subject_id, ql.session_id) END))::int AS distinct_users
     FROM search.query_log ql
     WHERE ql.submitted_at >= @window_start AND ql.normalized_query <> ''
     GROUP BY ql.normalized_query
