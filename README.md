@@ -93,6 +93,9 @@ X-Vidra-Internal-Auth: v1:{unix_ts}:{hex(hmac_sha256(INTERNAL_SECRET, ts + "\n" 
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET    | `/internal/v1/suggestions` | Autosuggest completions for a query prefix (doc-derived; typo fallback). Always 200. |
+| GET    | `/internal/v1/suggestions/bans` | List the queries currently suppressed from autosuggest (paged, for review). |
+| PUT    | `/internal/v1/suggestions/bans/{normalized_query}` | Suppress a query from instance-wide autosuggest (global; no viewer state). |
+| DELETE | `/internal/v1/suggestions/bans/{normalized_query}` | Lift a suggestion ban. Idempotent; the rollup re-earns suggestibility. |
 | GET    | `/internal/v1/search` | Ranked video IDs + scores only (hybrid full-text + trigram + filters), plus a `total` hit count, `total_is_lower_bound`, and `has_more` for paging. |
 | GET    | `/internal/v1/recommendations/related` | Related videos for a seed video. |
 | GET    | `/internal/v1/recommendations/home` | Home feed (trending / fresh / popular mix). |

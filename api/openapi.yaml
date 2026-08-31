@@ -24,6 +24,8 @@ tags:
     description: Domain and behavioral event intake.
   - name: history
     description: Per-user search history and privacy operations.
+  - name: moderation
+    description: Operator suppression of abusive query suggestions (global, not per-viewer).
 paths:
   /internal/v1/suggestions:
     get:
@@ -94,6 +96,114 @@ paths:
                 $ref: '#/components/schemas/SuggestionsResponse'
         '401':
           description: Missing or invalid internal authentication.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /internal/v1/suggestions/bans:
+    get:
+      operationId: listSuggestionBans
+      summary: List the queries currently suppressed from instance-wide autosuggest.
+      description: >-
+        Operator review surface for the suggestion ban list, so a ban can be
+        audited and reversed by someone who did not place it. Bans are global:
+        they carry no per-viewer state.
+      tags:
+        - moderation
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: A page of banned queries.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuggestionBanListResponse'
+        '401':
+          description: Missing or invalid internal authentication.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /internal/v1/suggestions/bans/{normalized_query}:
+    put:
+      operationId: banSuggestion
+      summary: Suppress a query from instance-wide autosuggest.
+      description: >-
+        Sets query_aggregates.banned and clears suggestible for the normalized
+        query, creating a placeholder row if the query has no aggregate yet (so a
+        known-bad string can be pre-empted). Idempotent. The service normalizes
+        the path segment, so the response echoes the key that actually moved.
+      tags:
+        - moderation
+      parameters:
+        - name: normalized_query
+          in: path
+          required: true
+          description: The query to ban, URL-path-escaped. Normalized server-side.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The query is banned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuggestionBanResponse'
+        '401':
+          description: Missing or invalid internal authentication.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: The query is empty after normalization.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      operationId: unbanSuggestion
+      summary: Lift a suggestion ban (idempotent).
+      description: >-
+        Clears query_aggregates.banned. It deliberately does NOT restore
+        suggestible: the aggregates_rollup re-earns that from the real
+        distinct-user threshold, so an unban can never promote a query that never
+        cleared it. A query with no further traffic never returns to autosuggest.
+      tags:
+        - moderation
+      parameters:
+        - name: normalized_query
+          in: path
+          required: true
+          description: The query to unban, URL-path-escaped. Normalized server-side.
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Ban lifted (idempotent).
+        '401':
+          description: Missing or invalid internal authentication.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: The query is empty after normalization.
           content:
             application/json:
               schema:
@@ -764,6 +874,58 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/HistoryEntry'
+        limit:
+          type: integer
+        offset:
+          type: integer
+    SuggestionBanResponse:
+      type: object
+      required:
+        - normalized_query
+        - banned
+      properties:
+        normalized_query:
+          type: string
+          description: The aggregate key that was banned (server-normalized).
+        banned:
+          type: boolean
+    SuggestionBanEntry:
+      type: object
+      required:
+        - normalized_query
+        - query
+        - total_count
+        - distinct_users
+        - first_seen
+        - last_seen
+      properties:
+        normalized_query:
+          type: string
+        query:
+          type: string
+          description: The most recent display form, for review.
+        total_count:
+          type: integer
+          format: int64
+        distinct_users:
+          type: integer
+        first_seen:
+          type: string
+          format: date-time
+        last_seen:
+          type: string
+          format: date-time
+    SuggestionBanListResponse:
+      type: object
+      required:
+        - entries
+        - limit
+        - offset
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/SuggestionBanEntry'
         limit:
           type: integer
         offset:

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/vidra/vidra-search/internal/event"
+	"github.com/vidra/vidra-search/internal/moderation"
 	"github.com/vidra/vidra-search/internal/recommendation"
 	"github.com/vidra/vidra-search/internal/search"
 	"github.com/vidra/vidra-search/internal/suggest"
@@ -177,6 +179,49 @@ func (s *Server) handleDeleteUser(c echo.Context) error {
 		return err
 	}
 	return c.NoContent(http.StatusNoContent)
+}
+
+// handleListSuggestionBans serves GET /internal/v1/suggestions/bans: the paged
+// list of queries currently suppressed from instance-wide autosuggest, so a ban
+// can be reviewed and reversed by someone who did not place it.
+func (s *Server) handleListSuggestionBans(c echo.Context) error {
+	resp, err := s.svcs.Moderation.List(c.Request().Context(), qInt(c, "limit"), qInt(c, "offset"))
+	if err != nil {
+		return err
+	}
+	return c.JSON(http.StatusOK, resp)
+}
+
+// handleBanSuggestion serves PUT /internal/v1/suggestions/bans/{normalized_query}.
+// Echo has already URL-decoded the path param; the service normalizes it, and the
+// response echoes the key that actually moved so a later unban can target it.
+// PUT, not POST: banning the same query twice is the same end state, not a second
+// ban.
+func (s *Server) handleBanSuggestion(c echo.Context) error {
+	resp, err := s.svcs.Moderation.Ban(c.Request().Context(), c.Param("normalized_query"))
+	if err != nil {
+		return moderationError(err)
+	}
+	return c.JSON(http.StatusOK, resp)
+}
+
+// handleUnbanSuggestion serves DELETE /internal/v1/suggestions/bans/{normalized_query}.
+// Idempotent: unbanning a query that is not banned is still a 204.
+func (s *Server) handleUnbanSuggestion(c echo.Context) error {
+	if err := s.svcs.Moderation.Unban(c.Request().Context(), c.Param("normalized_query")); err != nil {
+		return moderationError(err)
+	}
+	return c.NoContent(http.StatusNoContent)
+}
+
+// moderationError maps the one client-caused moderation failure to the standard
+// 422 envelope; everything else stays a 500.
+func moderationError(err error) error {
+	var empty moderation.ErrEmptyQuery
+	if errors.As(err, &empty) {
+		return newValidation("normalized_query", "must not be empty after normalization")
+	}
+	return err
 }
 
 // --- param helpers ---
