@@ -52,6 +52,7 @@ type Config struct {
 	CovisInterval          time.Duration
 	RetentionInterval      time.Duration
 	ReconcileGuardInterval time.Duration
+	ReevalInterval         time.Duration
 	JobTimeout             time.Duration
 
 	// Co-visitation tuning (§1.9 covis_rollup).
@@ -84,6 +85,10 @@ type Config struct {
 	InboxRetentionDays int
 	ProjectionFloor    float64
 	ReconcileMaxAge    time.Duration
+
+	// ReevalDryRun makes suggestible_reeval report what it would change without
+	// changing it. Off by default: leaving it on ships a fix that does nothing.
+	ReevalDryRun bool
 }
 
 func (c Config) withDefaults() Config {
@@ -99,6 +104,9 @@ func (c Config) withDefaults() Config {
 	set(&c.CovisInterval, 15*time.Minute)
 	set(&c.RetentionInterval, 24*time.Hour)
 	set(&c.ReconcileGuardInterval, 10*time.Minute)
+	// Daily, like retention: the two are the same story from opposite ends —
+	// retention deletes the evidence, this re-reads what is left of it.
+	set(&c.ReevalInterval, 24*time.Hour)
 	set(&c.JobTimeout, 2*time.Minute)
 	set(&c.TrendCapWindow, time.Hour)
 	set(&c.ReformulationGap, 60*time.Second)
@@ -202,6 +210,7 @@ func (r *Runner) Start(ctx context.Context) {
 	go r.runLoop(ctx, "covis_rollup", r.cfg.CovisInterval, r.covisRollup)
 	go r.runLoop(ctx, "retention", r.cfg.RetentionInterval, r.retention)
 	go r.runLoop(ctx, "reconcile_guard", r.cfg.ReconcileGuardInterval, r.reconcileGuard)
+	go r.runLoop(ctx, "suggestible_reeval", r.cfg.ReevalInterval, r.suggestibleReeval)
 	if r.cache != nil {
 		go r.runLoop(ctx, "trending_sweeper", r.cfg.TrendingInterval, r.trendingSweeper)
 	}
@@ -242,6 +251,8 @@ func (r *Runner) RunOnce(ctx context.Context, name string) error {
 		return r.retention(ctx)
 	case "reconcile_guard":
 		return r.reconcileGuard(ctx)
+	case "suggestible_reeval":
+		return r.suggestibleReeval(ctx)
 	}
 	for _, j := range r.extra {
 		if j.Name == name {
