@@ -27,6 +27,7 @@ import (
 	"github.com/vidra/vidra-search/internal/experiment"
 	"github.com/vidra/vidra-search/internal/history"
 	"github.com/vidra/vidra-search/internal/model"
+	"github.com/vidra/vidra-search/internal/moderation"
 	"github.com/vidra/vidra-search/internal/ranking"
 	"github.com/vidra/vidra-search/internal/recommendation"
 	"github.com/vidra/vidra-search/internal/search"
@@ -44,6 +45,7 @@ type testEnv struct {
 	search      *search.Service
 	rec         *recommendation.Service
 	history     *history.Service
+	moderation  *moderation.Service
 	worker      *worker.Runner
 	loader      *model.Loader
 	experiments *experiment.Registry
@@ -109,6 +111,7 @@ func newTestEnv(t *testing.T) *testEnv {
 		search:      search.NewService(q, loader, experiments, rdb, nil),
 		rec:         recommendation.NewService(q, rdb, loader, experiments, rdb, nil),
 		history:     history.NewService(st),
+		moderation:  moderation.NewService(q),
 		worker:      runner,
 		loader:      loader,
 		experiments: experiments,

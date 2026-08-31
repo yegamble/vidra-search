@@ -20,6 +20,7 @@ import (
 	"github.com/vidra/vidra-search/internal/config"
 	"github.com/vidra/vidra-search/internal/event"
 	"github.com/vidra/vidra-search/internal/history"
+	"github.com/vidra/vidra-search/internal/moderation"
 	"github.com/vidra/vidra-search/internal/recommendation"
 	"github.com/vidra/vidra-search/internal/search"
 	"github.com/vidra/vidra-search/internal/suggest"
@@ -34,11 +35,12 @@ type Pinger interface {
 // Services bundles the domain services the handlers delegate to. Any may be nil
 // for the route-contract test, which only inspects the routing table.
 type Services struct {
-	Suggest *suggest.Service
-	Search  *search.Service
-	Rec     *recommendation.Service
-	Events  *event.Service
-	History *history.Service
+	Suggest    *suggest.Service
+	Search     *search.Service
+	Rec        *recommendation.Service
+	Events     *event.Service
+	History    *history.Service
+	Moderation *moderation.Service
 }
 
 // Server holds the Echo instance and its dependencies.
@@ -177,6 +179,12 @@ func (s *Server) routes() {
 	// surface (the handlers no-op safely when a service is nil in tests).
 	g := s.echo.Group("/internal/v1", internalAuth(s.cfg.InternalSecret))
 	g.GET("/suggestions", s.handleSuggestions)
+	// Suggestion moderation: the write path for query_aggregates.banned. Registered
+	// before the parameterised routes below purely for readability; Echo's router
+	// is order-independent for these static/param mixes.
+	g.GET("/suggestions/bans", s.handleListSuggestionBans)
+	g.PUT("/suggestions/bans/:normalized_query", s.handleBanSuggestion)
+	g.DELETE("/suggestions/bans/:normalized_query", s.handleUnbanSuggestion)
 	g.GET("/search", s.handleSearch)
 	g.GET("/recommendations/related", s.handleRelated)
 	g.GET("/recommendations/home", s.handleHome)

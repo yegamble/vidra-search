@@ -256,6 +256,60 @@ SELECT version, status, activated_at FROM search.models WHERE kind='ranker' ORDE
   migrations that never ran. The command prints the ledger before and after.
   `--yes-i-know -1` empties the ledger entirely (`migrate up` then re-applies
   everything from 0001).
+- **Suppress a suggestion** (an abusive or unwanted string has reached
+  instance-wide autosuggest). Autosuggest promotes a query once
+  `MIN_QUERY_USER_COUNT` distinct users have issued it; `query_aggregates.banned`
+  is the operator override, and these three internal routes are its only write
+  path. Bans are **global** — they are not per-viewer and carry no viewer state.
+  ```bash
+  # Sign the DECODED path (see the HMAC construction in README.md); send the
+  # percent-escaped form on the wire.
+  sign() {  # sign <METHOD> <DECODED_PATH>
+    ts=$(date +%s)
+    sig=$(printf '%s\n%s\n%s' "$ts" "$1" "$2" \
+      | openssl dgst -sha256 -hmac "$INTERNAL_SECRET" -r | cut -d' ' -f1)
+    printf 'X-Vidra-Internal-Auth: v1:%s:%s' "$ts" "$sig"
+  }
+  BASE=http://vidra-search:8080
+
+  # Ban. The service normalizes the segment, so the display form works and the
+  # response echoes the aggregate key that actually moved.
+  curl -sS --path-as-is -X PUT -H "$(sign PUT '/internal/v1/suggestions/bans/buy cheap followers')" \
+    "$BASE/internal/v1/suggestions/bans/buy%20cheap%20followers"
+
+  # Review the ban list (paged) before reversing someone else's ban.
+  curl -sS -H "$(sign GET /internal/v1/suggestions/bans)" \
+    "$BASE/internal/v1/suggestions/bans?limit=50"
+
+  # Lift a ban (idempotent).
+  curl -sS --path-as-is -X DELETE -H "$(sign DELETE '/internal/v1/suggestions/bans/buy cheap followers')" \
+    "$BASE/internal/v1/suggestions/bans/buy%20cheap%20followers"
+  ```
+  - **A ban takes effect immediately**, with one bound: suggestion responses for
+    prefixes of **3 characters or fewer** are cached in Redis for 60s, so a very
+    short prefix can keep serving the banned string for up to a minute. Do not
+    flush the cache; wait it out.
+  - **A ban does not decay and is never pruned.** It survives every
+    `aggregates_rollup` pass (the rollup carries `banned` forward and folds it
+    into the recomputed `suggestible` flag), and nothing deletes
+    `query_aggregates`. Review the list periodically — a ban placed today is
+    still in force a year from now.
+  - **Banning a string with no traffic yet works**: it inserts a zero-count
+    placeholder, so a known-bad phrase can be pre-empted before it ever reaches
+    the suggestion threshold.
+  - **Unbanning does not re-suggest.** It clears `banned` only; the query returns
+    to autosuggest at the next `aggregates_rollup` pass that sees traffic for it
+    and still clears the distinct-user threshold. A query with no further traffic
+    never returns — which is the intended outcome, not a bug.
+  - This is a **suggestion** ban, not a search ban. It removes the string from
+    autosuggest completions; it does not hide videos, and it does not stop anyone
+    typing the query and getting results. Video-level suppression is vidra-core's
+    job.
+  - To audit by hand:
+    ```sql
+    SELECT normalized_query, display_query, distinct_users, total_count, last_seen
+    FROM search.query_aggregates WHERE banned ORDER BY normalized_query;
+    ```
 - **Regenerate typed queries** after a SQL change: `make sqlc` then commit
   `internal/store/sqlcgen`; `make sqlc-verify` guards drift in CI.
 - **Reseed a load-test corpus**: `COUNT=100000 make seed-loadtest`.

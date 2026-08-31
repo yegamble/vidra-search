@@ -51,6 +51,12 @@ Wilson lower-bound min-volume gate and a per-user contribution cap, so one user
 spamming a query 1000× yields `distinct_users = 1` and is neither suggestible nor
 trending (proven by `TestIntegrationManipulationResistance`).
 
+The threshold is automatic; the manual override is a **suggestion ban**
+(`query_aggregates.banned`, written only by the `/internal/v1/suggestions/bans`
+routes — see the runbook). A ban is a global property of an aggregated query
+string: it stores no viewer, no attribution and no per-viewer policy, and it
+removes a completion from autosuggest without hiding any video.
+
 ## Deletion & anonymization (W2)
 
 - `DELETE /internal/v1/users/{id}/search-history` and the `user.history_deleted`

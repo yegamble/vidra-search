@@ -26,6 +26,7 @@ import (
 	"github.com/vidra/vidra-search/internal/experiment"
 	"github.com/vidra/vidra-search/internal/history"
 	"github.com/vidra/vidra-search/internal/model"
+	"github.com/vidra/vidra-search/internal/moderation"
 	"github.com/vidra/vidra-search/internal/ranking"
 	"github.com/vidra/vidra-search/internal/recommendation"
 	"github.com/vidra/vidra-search/internal/search"
@@ -130,11 +131,12 @@ func serve() error {
 	evaluator := model.NewShadowEvaluator(q, loader, sm, logger, cfg.ShadowEvalDays)
 
 	svcs := api.Services{
-		Suggest: suggest.NewService(q, suggest.NewStoreAggregate(q), rdb, rdb, rdb, logger),
-		Search:  search.NewService(q, loader, experiments, rdb, logger),
-		Rec:     recommendation.NewService(q, rdb, loader, experiments, rdb, logger),
-		Events:  event.NewService(st, em, logger, eventCfg, rdb),
-		History: history.NewService(st),
+		Suggest:    suggest.NewService(q, suggest.NewStoreAggregate(q), rdb, rdb, rdb, logger),
+		Search:     search.NewService(q, loader, experiments, rdb, logger),
+		Rec:        recommendation.NewService(q, rdb, loader, experiments, rdb, logger),
+		Events:     event.NewService(st, em, logger, eventCfg, rdb),
+		History:    history.NewService(st),
+		Moderation: moderation.NewService(q),
 	}
 
 	runner := worker.NewRunner(st, rdb, workerConfig(cfg), wm, logger)
