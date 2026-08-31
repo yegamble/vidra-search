@@ -405,6 +405,42 @@ SELECT version, status, activated_at FROM search.models WHERE kind='ranker' ORDE
     stays high means core cannot derive subjects on your topology — fix that
     first; dropping the fallback there would silently stop counting your anonymous
     traffic and thin autosuggest with nothing in the logs to explain it.
+  - **Trending counts the same subject, and feels the NAT collapse harder.** The
+    trending distinct-user HLL and the per-subject contribution cap
+    (`SEARCH_TREND_CAP_WINDOW`) key on `subjectOf` — user id, else `subject_id`,
+    else `session_id`, the same order as the floor. Before that, one machine
+    rotating `X-Vidra-Session` presented N identities to both gates at once and
+    could take rank 1 of the published trending list from a single request loop.
+    The cost is the mirror image: a campus/CGNAT egress is ONE contributor, so a
+    query popular only behind one shared address now fails the distinct-user gate
+    instead of merely ranking lower.
+    - **The `SEARCH_TREND_CAP_WINDOW` interaction is a non-event.** The cap lets
+      one identity bump the ranking once per window (default 1h). Any identity
+      that OUTLIVES the window contributes exactly once per window regardless of
+      its total lifetime, so moving from a session-lived id to core's 24h subject
+      does not change a real visitor's ranking ceiling. Only an identity SHORTER
+      than the window behaves differently — and that is the attacker.
+    - **The symptom to watch is trending going quiet.** A reverse proxy that does
+      not forward the client address makes `c.RealIP()` the proxy for every
+      visitor, so the WHOLE instance collapses into one subject and trending
+      empties silently. It shows up as a climbing
+      `vidra_search_trending_rejections_total{reason="distinct_users"}` with a
+      shrinking `trend:q:top` / `trend:v:top`. Confirm it from the query log —
+      one subject serving your whole anonymous audience is the tell:
+      ```sql
+      SELECT count(DISTINCT subject_id) AS subjects, count(*) AS anonymous_rows
+      FROM search.query_log
+      WHERE user_id IS NULL AND submitted_at >= now() - interval '24 hours';
+      ```
+      `subjects` in the low single digits against a large `anonymous_rows` means
+      fix the proxy's forwarded-address configuration; it is not a search bug and
+      no search-side knob compensates for it.
+    - **What this does not close.** The subject rotates daily, so one address
+      presents up to `TREND_WINDOW_DAYS` (default 2) distinct subjects inside the
+      HLL window. At the default `MIN_QUERY_USER_COUNT` of 3 that is still short
+      of the floor; at a floor of 2 the Wilson min-volume gate is what stops a
+      midnight-straddling single-address attack, so do not lower both knobs at
+      once.
   - **Both queries must move together.** `rollups.sql` and `reevaluation.sql`
     carry the counting expression byte-for-byte identically, on purpose: the
     re-evaluation pass is the rollup's recount with the batch `INNER JOIN`

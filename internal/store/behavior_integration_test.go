@@ -9,6 +9,7 @@ package store_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -148,18 +149,43 @@ func TestIntegrationAggregatesRollupSuggestible(t *testing.T) {
 	}
 }
 
-// TestIntegrationManipulationResistance: one user submitting the same query 1000×
-// must never become suggestible NOR trending — distinct users stays 1.
+// TestIntegrationManipulationResistance: one actor submitting the same query
+// 1000× must never become suggestible NOR trending — distinct users stays 1.
+//
+// It is run for BOTH attacker shapes, because they used to be gated by different
+// identities. A signed-in spammer was always collapsed by user_id. An ANONYMOUS
+// spammer rotating X-Vidra-Session was not: suggestions collapsed them by
+// subject_id from migration 0016, but trending still keyed its distinct-user HLL
+// and its per-subject cap on the forgeable session_id, so the rotating half of
+// this test would publish the spam query as trending while the suggestible half
+// of the same fixture correctly refused it.
 func TestIntegrationManipulationResistance(t *testing.T) {
+	t.Run("signed-in spammer", func(t *testing.T) {
+		spammer := uuid.New()
+		assertSpamIsGated(t, func(now time.Time, i int) event.Envelope {
+			return submitted(now, "buy followers now", &spammer, "sess-spam", false)
+		})
+	})
+	// One machine, one server-derived subject, a fresh session id per request.
+	t.Run("anonymous spammer rotating the session header", func(t *testing.T) {
+		assertSpamIsGated(t, func(now time.Time, i int) event.Envelope {
+			return anonSubmitted(now, "buy followers now", fmt.Sprintf("rotated-%d", i), "subject-spammer")
+		})
+	})
+}
+
+// assertSpamIsGated ingests 1000 identical submissions built by mk and asserts
+// the query is counted by volume but gated out of BOTH suggestions and trending.
+func assertSpamIsGated(t *testing.T, mk func(now time.Time, i int) event.Envelope) {
+	t.Helper()
 	env := newTestEnv(t)
 	now := time.Now()
-	spammer := uuid.New()
 
 	// 1000 identical submissions in two ≤500 batches.
 	for b := 0; b < 2; b++ {
 		var batch []event.Envelope
 		for i := 0; i < 500; i++ {
-			batch = append(batch, submitted(now, "buy followers now", &spammer, "sess-spam", false))
+			batch = append(batch, mk(now, b*500+i))
 		}
 		ingest(t, env, batch...)
 	}
@@ -178,6 +204,11 @@ func TestIntegrationManipulationResistance(t *testing.T) {
 	total := countRows(t, env, "SELECT total_count FROM search.query_aggregates WHERE normalized_query = 'buy followers now'")
 	if total != 1000 {
 		t.Errorf("total_count = %d, want 1000 (volume counted, but distinct gated)", total)
+	}
+	if d, err := env.cache.TrendDistinctUsers(context.Background(), "q", "buy followers now", 2); err != nil {
+		t.Fatalf("trend distinct: %v", err)
+	} else if d != 1 {
+		t.Errorf("trending saw %d distinct subjects, want 1 — 1000 events from one actor are one contributor", d)
 	}
 	if set := env.cache.TrendingQuerySet(context.Background()); set["buy followers now"] != 0 {
 		t.Errorf("spam query must NOT trend, trend set = %v", set)
