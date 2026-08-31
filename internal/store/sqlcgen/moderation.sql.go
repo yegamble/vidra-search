@@ -26,15 +26,14 @@ ON CONFLICT (normalized_query) DO UPDATE SET
 //
 // Two columns move, not one, and the second is not redundant. Migration 0006 and
 // rollups.sql both state the invariant "suggestible only when the distinct-user
-// threshold is cleared AND the query is not banned", but only the rollup ever
-// writes `suggestible`, and it recomputes it ONLY for queries that appear in its
-// new-traffic batch CTE (an INNER JOIN). Nothing decays or prunes the flag
-// either: retention deletes query_log/behavior_events, never query_aggregates. A
-// banned row whose traffic dries up would therefore keep `suggestible = true`
-// forever, leaving the documented invariant permanently violated and any future
-// reader keyed on `suggestible` alone free to serve a banned query. Writing both
-// columns here makes the ban self-consistent immediately, with no dependence on
-// a rollup pass that may never come.
+// threshold is cleared AND the query is not banned", but `suggestible` is only
+// ever written by two BACKGROUND passes: the rollup (which recomputes it only
+// for queries in its new-traffic batch CTE, an INNER JOIN) and the daily
+// suggestible_reeval housekeeper in reevaluation.sql. A ban that set only
+// `banned` would leave the invariant violated until one of those passes ran —
+// up to 24h, or forever if the query never sees traffic again and the
+// housekeeper is disabled. Writing both columns here makes the ban
+// self-consistent immediately, depending on no pass at all.
 //
 // Upsert rather than UPDATE so a ban can pre-empt a known-bad string that has no
 // aggregate row yet. The placeholder carries zero counts; the rollup's LEFT JOIN
@@ -113,6 +112,11 @@ WHERE normalized_query = $1
 // that threshold. The query returns to the suggestion stream on the next
 // aggregates_rollup pass that sees traffic for it — and if it never gets traffic
 // again it never returns, which is the honest outcome.
+//
+// The query returns to the suggestion stream at the next rollup pass that sees
+// traffic for it, or at the next suggestible_reeval pass if its surviving
+// query_log rows still clear the threshold. Both re-earn the threshold from real
+// distinct users; neither can promote a string that never cleared it.
 //
 // Idempotent by construction (matching DeleteUserSearchHistoryEntry): unbanning
 // a query that is not banned, or has no row at all, is a no-op success, so a

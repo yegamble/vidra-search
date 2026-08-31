@@ -172,6 +172,8 @@ func workerConfig(cfg *config.Config) worker.Config {
 		CovisInterval:           cfg.CovisInterval,
 		RetentionInterval:       cfg.RetentionInterval,
 		ReconcileGuardInterval:  cfg.ReconcileGuardInterval,
+		ReevalInterval:          cfg.ReevalInterval,
+		ReevalDryRun:            cfg.ReevalDryRun,
 		MinQueryUserCount:       cfg.MinQueryUserCount,
 		RetentionDays:           cfg.EventRetentionDays,
 		QueryHalfLifeSeconds:    cfg.QueryHalfLifeHours * 3600,

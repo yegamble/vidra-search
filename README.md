@@ -186,7 +186,9 @@ the next `docker compose up` re-migrates from scratch.
 | `MODEL_DIR` | `/var/lib/vidra-search/models` | Directory holding learned ranker artifacts. |
 | `SEARCH_MODEL_LOADER_INTERVAL` | `1m` | Active-ranker hot-swap check cadence. |
 | `SEARCH_SHADOW_EVAL_INTERVAL` / `SEARCH_SHADOW_EVAL_DAYS` | `1h` / `14` | Shadow-eval cadence and impression look-back. |
-| `SEARCH_RUN_JOB` | `""` | Run one named worker job once and exit (e.g. `shadow_eval`, `covis_rollup`). |
+| `SEARCH_REEVAL_INTERVAL` | `24h` | Cadence of the `suggestible_reeval` housekeeper. |
+| `SEARCH_REEVAL_DRY_RUN` | `false` | Make `suggestible_reeval` report what it would change without changing it. |
+| `SEARCH_RUN_JOB` | `""` | Run one named worker job once and exit (e.g. `shadow_eval`, `covis_rollup`, `suggestible_reeval`). |
 
 Policy knobs (`MIN_QUERY_USER_COUNT`, retention, half-life, …) are boot-time
 fallbacks; vidra-core overrides them at runtime via the `search.config_updated`

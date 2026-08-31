@@ -109,6 +109,10 @@ are idempotent.
   projections.
 - `reconcile_guard` (10m) — warns + sets the reconcile-age gauge when no
   `reconcile.end` has arrived within `~48h`.
+- `suggestible_reeval` (24h) — recomputes `query_aggregates.suggestible` for
+  EVERY row against the surviving `query_log`, not just rows with new traffic.
+  Batched at 10k, logs `changed` plus a sample; `SEARCH_REEVAL_DRY_RUN=true`
+  makes it report-only. See "Re-evaluate suggestibility" below.
 
 W3 adds four more loops (wired as generic periodic jobs; also runnable one-shot
 via `SEARCH_RUN_JOB=<name>`):
@@ -291,16 +295,19 @@ SELECT version, status, activated_at FROM search.models WHERE kind='ranker' ORDE
     flush the cache; wait it out.
   - **A ban does not decay and is never pruned.** It survives every
     `aggregates_rollup` pass (the rollup carries `banned` forward and folds it
-    into the recomputed `suggestible` flag), and nothing deletes
-    `query_aggregates`. Review the list periodically — a ban placed today is
-    still in force a year from now.
+    into the recomputed `suggestible` flag), `suggestible_reeval` never writes
+    `banned` at all and holds a banned row at `suggestible = false` regardless of
+    traffic, and nothing deletes `query_aggregates`. Review the list periodically
+    — a ban placed today is still in force a year from now.
   - **Banning a string with no traffic yet works**: it inserts a zero-count
     placeholder, so a known-bad phrase can be pre-empted before it ever reaches
     the suggestion threshold.
-  - **Unbanning does not re-suggest.** It clears `banned` only; the query returns
-    to autosuggest at the next `aggregates_rollup` pass that sees traffic for it
-    and still clears the distinct-user threshold. A query with no further traffic
-    never returns — which is the intended outcome, not a bug.
+  - **Unbanning does not itself re-suggest.** It clears `banned` only. The query
+    returns to autosuggest at the next `aggregates_rollup` pass that sees traffic
+    for it, or at the next `suggestible_reeval` pass if its *existing* `query_log`
+    rows still clear the distinct-user threshold. Either way the threshold is
+    re-earned from real distinct users — an unban can never promote a string that
+    never cleared it. Once the evidence has aged out, the query does not return.
   - This is a **suggestion** ban, not a search ban. It removes the string from
     autosuggest completions; it does not hide videos, and it does not stop anyone
     typing the query and getting results. Video-level suppression is vidra-core's
@@ -310,11 +317,59 @@ SELECT version, status, activated_at FROM search.models WHERE kind='ranker' ORDE
     SELECT normalized_query, display_query, distinct_users, total_count, last_seen
     FROM search.query_aggregates WHERE banned ORDER BY normalized_query;
     ```
+- **Re-evaluate suggestibility** (autosuggest is offering strings your instance
+  can no longer justify). Three mechanics used to make a suggestion permanent:
+  `suggestible` is keyed on `distinct_users >= MIN_QUERY_USER_COUNT` (not on the
+  decaying `decayed_freq`, which is only a sort key); the rollup's recount INNER
+  JOINs its new-traffic batch, so a query with no new traffic is never
+  re-evaluated; and `query_aggregates` appears in no `DELETE` in the schema, so
+  retention prunes the `query_log` rows that justified a suggestion while the
+  suggestion itself survives. `suggestible_reeval` closes all three by re-running
+  the rollup's own predicate over every row against the surviving `query_log`.
+
+  **Always dry-run first.** A remediation that silently empties autosuggest is a
+  worse outcome than the bug it closes.
+  ```bash
+  # What WOULD change, and a sample of which rows — writes nothing.
+  docker compose run --rm \
+    -e SEARCH_RUN_JOB=suggestible_reeval -e SEARCH_REEVAL_DRY_RUN=true \
+    vidra-search
+  # Apply it, once the count looks like what you expect.
+  docker compose run --rm -e SEARCH_RUN_JOB=suggestible_reeval vidra-search
+  ```
+  - **It never un-bans.** `banned` is not in the UPDATE's SET list, so the pass is
+    structurally incapable of clearing a ban; a banned row is held at
+    `suggestible = false` however much traffic it receives.
+  - **It refuses to run on an empty ledger.** If no `query_log` row falls inside
+    the retention window the pass logs a WARN and skips, rather than concluding
+    that nothing on the instance is supported and un-suggesting everything. That
+    is the reconcile-orphan failure mode; if you see this WARN, find out why the
+    ledger is empty before doing anything else.
+  - **Bounded**: 10k rows per statement, at most 1M rows per pass; a larger
+    backlog is finished by the next tick. Only rows whose flag actually moves are
+    written, so a steady-state pass is a no-op.
+  - **Cold start is unaffected.** A fresh instance's `query_aggregates` is empty,
+    and autosuggest's other four streams (title / channel / tag prefixes and the
+    signed-in user's own history) are derived from `documents`, not from
+    aggregates — so this pass has nothing to take away on day one. No grace period
+    is applied deliberately: a grace period would serve suggestions that no
+    surviving evidence supports, which is the bug, just time-boxed.
+  - Same cache bound as a ban: suggestion responses for prefixes of **3 characters
+    or fewer** are cached in Redis for 60s, so a very short prefix can keep
+    serving a just-un-suggested string for up to a minute.
+  - **What is my instance currently suggesting?** `ListBannedSuggestions` shows
+    what is banned; nothing yet shows what is live. Until that surface exists:
+    ```sql
+    SELECT normalized_query, display_query, distinct_users, decayed_freq, last_seen
+    FROM search.query_aggregates
+    WHERE suggestible AND NOT banned ORDER BY decayed_freq DESC LIMIT 100;
+    ```
 - **Regenerate typed queries** after a SQL change: `make sqlc` then commit
   `internal/store/sqlcgen`; `make sqlc-verify` guards drift in CI.
 - **Reseed a load-test corpus**: `COUNT=100000 make seed-loadtest`.
 - **Run a rollup once** (debug): `SEARCH_RUN_JOB=covis_rollup make covis-rollup`,
-  or `make shadow-eval`.
+  or `make shadow-eval`. `SEARCH_RUN_JOB=suggestible_reeval` runs the
+  suggestibility pass once and exits.
 - **Train a shadow ranker**: see `training/README.md` and `docs/evaluation.md`.
 - **Dev Postgres refuses to start** after the image moved to `postgres:18`
   ("database files are incompatible with server", or a `pg_upgrade` hint): the

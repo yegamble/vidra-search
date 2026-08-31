@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 // setEnv sets envs for one test and restores them via t.Cleanup.
@@ -124,4 +125,31 @@ func TestLoadDatabaseURL(t *testing.T) {
 			t.Fatalf("LoadDatabaseURL = %q, want the required error", got)
 		}
 	})
+}
+
+// TestLoadReevalDryRunKnob pins the suggestible_reeval safety lever. The
+// housekeeper writes by default, so an operator who wants to measure the blast
+// radius before taking it has exactly one switch — a silently-unparsed
+// SEARCH_REEVAL_DRY_RUN would give them a live pass instead of a report.
+func TestLoadReevalDryRunKnob(t *testing.T) {
+	setEnv(t, map[string]string{"VIDRA_ENV": "development"})
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ReevalDryRun {
+		t.Errorf("ReevalDryRun defaults to true — the fix would then never apply")
+	}
+	if cfg.ReevalInterval != 24*time.Hour {
+		t.Errorf("ReevalInterval = %v, want 24h", cfg.ReevalInterval)
+	}
+
+	setEnv(t, map[string]string{"VIDRA_ENV": "development", "SEARCH_REEVAL_DRY_RUN": "true"})
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load with dry run: %v", err)
+	}
+	if !cfg.ReevalDryRun {
+		t.Errorf("SEARCH_REEVAL_DRY_RUN=true did not reach the config")
+	}
 }

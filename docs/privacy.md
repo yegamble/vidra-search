@@ -51,6 +51,18 @@ Wilson lower-bound min-volume gate and a per-user contribution cap, so one user
 spamming a query 1000× yields `distinct_users = 1` and is neither suggestible nor
 trending (proven by `TestIntegrationManipulationResistance`).
 
+The threshold is **continuously re-checked, not latched**. The rollup only
+recomputes `suggestible` for queries carrying new traffic, and nothing prunes
+`query_aggregates`, so a string that once cleared the floor used to stay
+suggestible forever — including past the retention boundary, where the
+`query_log` rows proving it cleared the floor are deleted while the suggestion
+survives. The daily `suggestible_reeval` housekeeper closes that: it re-applies
+the same predicate over every aggregate row against the **currently surviving**
+`query_log`, so `suggestible` means "supported by evidence that still exists"
+rather than "was supported once". A query whose evidence has aged out, or been
+anonymized away by a history deletion, loses instance-wide suggestibility on the
+next pass.
+
 The threshold is automatic; the manual override is a **suggestion ban**
 (`query_aggregates.banned`, written only by the `/internal/v1/suggestions/bans`
 routes — see the runbook). A ban is a global property of an aggregated query

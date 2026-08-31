@@ -95,6 +95,12 @@ type Config struct {
 	CovisInterval          time.Duration
 	RetentionInterval      time.Duration
 	ReconcileGuardInterval time.Duration
+	ReevalInterval         time.Duration
+
+	// ReevalDryRun makes the suggestible_reeval housekeeper report what it would
+	// change instead of changing it — the safe first pass on an instance that has
+	// been accumulating suggestions nothing in query_log still supports.
+	ReevalDryRun bool
 
 	// Co-visitation tuning (§1.9). Window bounds the in-session gap for a pair;
 	// lambda is the cosine shrinkage; top-M is neighbors kept per item.
@@ -176,6 +182,12 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if cfg.ReconcileGuardInterval, err = getEnvDuration("SEARCH_RECONCILE_GUARD_INTERVAL", 10*time.Minute); err != nil {
+		return nil, err
+	}
+	if cfg.ReevalInterval, err = getEnvDuration("SEARCH_REEVAL_INTERVAL", 24*time.Hour); err != nil {
+		return nil, err
+	}
+	if cfg.ReevalDryRun, err = getEnvBool("SEARCH_REEVAL_DRY_RUN", false); err != nil {
 		return nil, err
 	}
 	if cfg.ModelLoaderInterval, err = getEnvDuration("SEARCH_MODEL_LOADER_INTERVAL", time.Minute); err != nil {
