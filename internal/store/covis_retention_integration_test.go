@@ -236,19 +236,22 @@ func TestIntegrationCovisRetentionRetractsSupportFromScores(t *testing.T) {
 // data out of what this service publishes, so the question is whether their
 // co-visitation SUPPORT — not just their name on it — actually leaves.
 //
-// The test answers both halves, and they do not agree, which is the point:
+// WHEN THIS TEST WAS WRITTEN THE ANSWER WAS NO, AND IT SAID SO. Clear-all did not
+// delete `behavior_events`, it NULLed `user_id`, so the row survived, the floor
+// fell back to COALESCE(subject_id, session_id), and the co-visit still counted.
+// The test pinned that in two acts: act 1 drove the shipped clear-all and
+// asserted the score UNCHANGED, act 2 deleted the rows by hand — "what a
+// delete-based purge produces" — and asserted the retraction. Two acts because
+// the shipped behaviour and the ruling did not agree.
 //
-//   - Act 1 drives the SHIPPED clear-all (history.ClearAll, the handler behind
-//     DELETE /me/search-history). It does not delete `behavior_events`; it NULLs
-//     `user_id` (search/queries/history.sql says so in its header: anonymize, do
-//     not delete, so global aggregates stay intact). The row survives, the floor
-//     falls back to COALESCE(subject_id, session_id), and the co-visit still
-//     counts. So the score is UNCHANGED — asserted here rather than wished away,
-//     because a reader who assumes clear-all retracts support would be wrong.
-//   - Act 2 removes the rows, which is what a delete-based purge produces. THEN
-//     the support has to be gone from the score on the next rollup, not merely
-//     from the floor count: the four-subject pair falls to the three-subject
-//     score, and the three-subject pair drops below the floor.
+// They agree now. Clear-all deletes (queries/history.sql carries the argument:
+// anonymizing was not a milder deletion but an inversion of one, because it moved
+// the account's rows onto the client-supplied session fallback and turned one
+// person into N subjects). So the hand-written DELETE that was act 2 IS act 1,
+// and the test is one act: the SHIPPED clear-all must retract the user's support
+// from the SCORE and not merely from the floor count — the four-subject pair
+// falls to the three-subject score, and the three-subject pair drops below the
+// floor and disappears.
 func TestIntegrationCovisPurgeRetractsAUsersSupport(t *testing.T) {
 	env := newTestEnv(t)
 	ctx := context.Background()
@@ -286,7 +289,7 @@ func TestIntegrationCovisPurgeRetractsAUsersSupport(t *testing.T) {
 		t.Fatalf("Q1→Q2 = %.8f (published %v), want 0.20000 with four subjects", s, ok)
 	}
 
-	// Act 1 — the shipped clear-all anonymizes; it does not retract support.
+	// The shipped clear-all. It deletes; there is nothing left to orphan.
 	if err := env.history.ClearAll(ctx, victim); err != nil {
 		t.Fatalf("ClearAll: %v", err)
 	}
@@ -295,37 +298,27 @@ func TestIntegrationCovisPurgeRetractsAUsersSupport(t *testing.T) {
 		t.Fatalf("clear-all must leave no row attributed to the user, found %d", n)
 	}
 	if n := countRows(t, env,
-		`SELECT count(*) FROM search.behavior_events WHERE session_id IN ('cr-purge-p','cr-purge-q')`); n != 4 {
-		t.Fatalf("clear-all NULLs user_id, it does not delete: rows = %d, want 4", n)
-	}
-	runWorker(t, env, "covis_rollup")
-	if s, ok := neighborEdge(t, env, p1, p2); !ok || math.Abs(s-0.16153846) > 1e-6 {
-		t.Errorf("P1→P2 = %.8f (published %v) after clear-all, want 0.16154 unchanged — the row "+
-			"survives with user_id NULL and still counts under its session id", s, ok)
-	}
-
-	// Act 2 — the rows themselves go, which is what a delete-based purge does.
-	if _, err := env.store.Pool.Exec(ctx,
-		`DELETE FROM search.behavior_events WHERE session_id IN ('cr-purge-p','cr-purge-q')`); err != nil {
-		t.Fatalf("purge the user's rows: %v", err)
+		`SELECT count(*) FROM search.behavior_events WHERE session_id IN ('cr-purge-p','cr-purge-q')`); n != 0 {
+		t.Fatalf("clear-all must DELETE the user's rows, not orphan them: %d left in their "+
+			"sessions. An orphaned row keeps counting — under its session id, as a NEW subject", n)
 	}
 	if n := ledgerCoVisits(t, env, "watch", q1, q2); n != 3 {
-		t.Fatalf("retained co-visits(Q1,Q2) = %d, want 3 after the purge", n)
+		t.Fatalf("retained co-visits(Q1,Q2) = %d, want 3 after the clear", n)
 	}
 
 	runWorker(t, env, "covis_rollup")
 
 	if _, ok := neighborEdge(t, env, p1, p2); ok {
-		t.Errorf("P1→P2 had three subjects and one of them purged; two are left, below the floor, " +
-			"so the edge must disappear")
+		t.Errorf("P1→P2 had three subjects and one of them cleared their history; two are left, " +
+			"below the floor, so the edge must disappear")
 	}
 	after, ok := neighborEdge(t, env, q1, q2)
 	if !ok {
 		t.Fatalf("Q1→Q2 still has three subjects and must stay published")
 	}
 	if math.Abs(after-0.16153846) > 1e-6 {
-		t.Errorf("Q1→Q2 score = %.8f after the purge, want 0.16154 — the purged user's co-visit must "+
-			"leave the SCORE as well as the floor count. 0.20000 means their contribution survives "+
-			"inside a counter their purge cannot reach", after)
+		t.Errorf("Q1→Q2 score = %.8f after the clear, want 0.16154 — the cleared user's co-visit "+
+			"must leave the SCORE as well as the floor count. 0.20000 means their contribution "+
+			"survives somewhere their deletion cannot reach", after)
 	}
 }

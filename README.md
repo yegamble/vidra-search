@@ -47,7 +47,8 @@ search-history and full privacy-purge endpoints round out the surface.
 - **Learned ranking without leaps of faith.** New LightGBM models ship in shadow,
   are evaluated online against logged impressions, and are promoted manually.
 - **Privacy is an endpoint, not a promise.** Per-user history deletion and a full
-  purge (history, projections, anonymized logs) are part of the internal contract.
+  purge — the ledger rows are deleted, not just unnamed — are part of the
+  internal contract.
 
 > **Internal-only service — never publish its port to the internet.** HMAC auth
 > plus network isolation are the *only* protections; the server binds `0.0.0.0`
@@ -101,9 +102,9 @@ X-Vidra-Internal-Auth: v1:{unix_ts}:{hex(hmac_sha256(INTERNAL_SECRET, ts + "\n" 
 | GET    | `/internal/v1/recommendations/home` | Home feed (trending / fresh / popular mix). |
 | POST   | `/internal/v1/events` | Ingest a batch of domain + behavioral events (≤500). |
 | GET    | `/internal/v1/users/{user_id}/search-history` | A user's non-hidden search history (paginated). |
-| DELETE | `/internal/v1/users/{user_id}/search-history` | Clear a user's search history and anonymize their raw logs. |
-| DELETE | `/internal/v1/users/{user_id}/search-history/{normalized_query}` | Delete a single search-history entry (normalized query is path-escaped). |
-| DELETE | `/internal/v1/users/{user_id}` | Full privacy purge for a user (history, projections, anonymized logs). |
+| DELETE | `/internal/v1/users/{user_id}/search-history` | Clear a user's search history and delete their rows in the raw ledgers. |
+| DELETE | `/internal/v1/users/{user_id}/search-history/{normalized_query}` | Delete a single search-history entry and that query's ledger rows for the user (normalized query is path-escaped). |
+| DELETE | `/internal/v1/users/{user_id}` | Full privacy purge for a user (history, projections, and every ledger row naming them). |
 
 A drift guard (`make openapi-verify`) fails the build if the routes registered in
 `internal/api` diverge from the spec. The ops probes `/healthz`, `/readyz`,

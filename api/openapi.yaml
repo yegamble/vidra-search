@@ -506,7 +506,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
     delete:
       operationId: clearUserSearchHistory
-      summary: Clear a user's search history and anonymize their raw logs.
+      summary: Clear a user's search history and delete their rows in the raw ledgers.
       tags:
         - history
       parameters:
@@ -534,7 +534,7 @@ paths:
   /internal/v1/users/{user_id}/search-history/{normalized_query}:
     delete:
       operationId: deleteUserSearchHistoryEntry
-      summary: Delete a single search-history entry (normalized query is path-escaped).
+      summary: Delete a single search-history entry and that query's ledger rows for the user (normalized query is path-escaped).
       tags:
         - history
       parameters:
@@ -568,7 +568,7 @@ paths:
   /internal/v1/users/{user_id}:
     delete:
       operationId: deleteUser
-      summary: Full privacy purge for a user (history, projections, anonymized logs).
+      summary: Full privacy purge for a user (history, projections, and every ledger row naming them).
       tags:
         - history
       parameters:

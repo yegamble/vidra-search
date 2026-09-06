@@ -135,7 +135,7 @@ func serve() error {
 		Search:     search.NewService(q, loader, experiments, rdb, logger),
 		Rec:        recommendation.NewService(q, rdb, loader, experiments, rdb, logger),
 		Events:     event.NewService(st, em, logger, eventCfg, rdb),
-		History:    history.NewService(st),
+		History:    history.NewService(st, rdb),
 		Moderation: moderation.NewService(q),
 	}
 

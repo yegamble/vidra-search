@@ -37,8 +37,8 @@ history/projection rows are ever written.
 
 The raw ledgers (`query_log`, `behavior_events`), the ephemeral session context
 (Redis, 2h TTL), and the global trending aggregates are populated regardless of
-the flag — they carry no durable per-user projection and are anonymized/pruned
-(below).
+the flag — they carry no durable per-user projection, and they are deleted on a
+history deletion or pruned by retention (below).
 
 ## Aggregation thresholds (W2)
 
@@ -114,8 +114,8 @@ survives. The daily `suggestible_reeval` housekeeper closes that: it re-applies
 the same predicate over every aggregate row against the **currently surviving**
 `query_log`, so `suggestible` means "supported by evidence that still exists"
 rather than "was supported once". A query whose evidence has aged out, or been
-anonymized away by a history deletion, loses instance-wide suggestibility on the
-next pass.
+deleted by a history deletion, loses instance-wide suggestibility on the next
+pass.
 
 The threshold is automatic; the manual override is a **suggestion ban**
 (`query_aggregates.banned`, written only by the `/internal/v1/suggestions/bans`
@@ -123,17 +123,63 @@ routes — see the runbook). A ban is a global property of an aggregated query
 string: it stores no viewer, no attribution and no per-viewer policy, and it
 removes a completion from autosuggest without hiding any video.
 
-## Deletion & anonymization (W2)
+## Deletion (W2)
+
+**Clearing history deletes the rows.** It does not anonymize them, and the
+distinction is not a nicety — until vidra-search#37 clearing NULLed `user_id`
+and kept the row, which was not a milder deletion but an inversion of one. Every
+k-anonymity floor above counts distinct `user_id`s **plus**, for rows with no
+`user_id`, distinct `COALESCE(subject_id, session_id)`. An attributed row carries
+no `subject_id` — core mints the day-scoped pseudonym only for callers with no
+account — so removing the account id dropped every one of that account's rows
+onto the client-supplied session fallback, and one person who had used three
+sessions stopped counting as one subject and started counting as **three**.
+Measured against a real database: a pair one signed-in user co-watched in three
+sessions read `subjects = 1` before the clear and `3` after, which cleared the
+default floor of 3 and published the pair into the globally-served "watch this
+next" index; the same move promoted a below-the-floor private query into
+instance-wide autosuggest. A privacy action that RAISES a distinct-subject count
+publishes exactly what the floor exists to suppress, and any single account could
+trigger it deliberately. Deletion is also what makes that class of bug
+impossible rather than merely fixed: removing rows can only ever lower a
+distinct-subject count, never raise one.
 
 - `DELETE /internal/v1/users/{id}/search-history` and the `user.history_deleted`
-  (scope=search) event **delete** the user's `user_search_history` rows and
-  **NULL** their `user_id` in `query_log` and `behavior_events` (anonymization —
-  the aggregate signal survives, the attribution does not).
+  (scope=search) event **delete** the user's `user_search_history` rows, their
+  `query_log` rows, and their `behavior_events` rows — matched on the `user_id`
+  column *and* on `props->>'user_id'`, because `props` stores the full original
+  payload and a future event type whose handler forgot to map the column would
+  otherwise leave the account id in the JSON for ever. They also drop the
+  ephemeral Redis recency lists (`sess:q:`/`sess:v:`) for the sessions those rows
+  named: those lists are read straight back into the account's own autosuggest,
+  so leaving them would keep offering the user the queries they just cleared.
 - `DELETE /internal/v1/users/{id}` and `user.history_deleted` (scope=all)
   additionally purge `user_watch_projection`. After a purge, no row anywhere
-  references the user (proven by `TestIntegrationHistoryEndpointsAndPurge`).
-- `DELETE .../search-history/{normalized_query}` removes a single entry; if the
-  user searches it again it is recreated fresh.
+  references the user (proven by `TestIntegrationHistoryEndpointsAndPurge` and
+  `TestIntegrationClearAllDeletesEveryRowThatNamesTheAccount`).
+- `DELETE .../search-history/{normalized_query}` removes a single entry **and
+  that query's `query_log`/`behavior_events` rows for that user**, for the same
+  reason: "forget I searched X" cannot leave the account counted toward X's
+  instance-wide distinct-subject floor. If they search it again it is recreated
+  fresh.
+- The `events_inbox` dedupe ledger is deliberately **kept**. It holds
+  `(event_id, type, received_at)` and no account reference, and it is the
+  tombstone that stops an at-least-once redelivery from resurrecting the deleted
+  rows.
+
+### What the derived aggregates do on their next pass
+
+A deletion reaches the derived surfaces at their own cadence, not instantly.
+Honest per surface:
+
+| surface | how it reflects a deletion | cadence |
+| --- | --- | --- |
+| co-visitation `item_neighbors` | fully — the covis-v1 index is a from-scratch rebuild whose co-occurrence counts, cosine normalization mass and floor subject counts all come out of one pairing of the retained `behavior_events` | `SEARCH_COVIS_INTERVAL`, default 15 min |
+| autosuggest `query_aggregates.distinct_users` / `suggestible` | fully — an exact recount over the surviving `query_log`, by the rollup for any string carrying new traffic and by `suggestible_reeval` for every row regardless | rollup `SEARCH_AGGREGATES_INTERVAL` (default 1 min); `suggestible_reeval` daily |
+| `query_aggregates.total_count` / `decayed_freq` | **not at all** — cumulative counters, never recomputed. They carry no identity (a query string and a number), and the gate that decides publication is `distinct_users`, which does recompute | — |
+| `query_video_engagement` | **not at all** — cumulative impression/click/watch counters folded forward by cursor and never pruned. No identity in the rows, and no k-floor reads them; the same shape vidra-search#36 removed from co-visitation, still present here | — |
+| trending (Redis `hll:`/`cnt:`/`trend:`) | **not at all, by construction** — the distinct-subject count is a HyperLogLog sketch built at ingest, and an element cannot be removed from an HLL. It expires with the per-day key TTL. For the same reason trending cannot be *pushed* by a clear either: the sketch does not re-read the ledger, so this bypass never reached it | expires ≤ 8 days |
+| Redis `guard:trend:{domain}:{subject}:{item}` | not deleted — the account id is in the key, but a `MATCH` sweep would walk the whole keyspace on every clear for a rate-limit token | expires with `SEARCH_TREND_CAP_WINDOW`, default 1 h |
 
 ## Retention (W2)
 

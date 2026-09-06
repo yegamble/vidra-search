@@ -7,7 +7,8 @@ import "encoding/json"
 // (user_search_history, user_watch_projection) only when it is attributable to
 // a signed-in user_id AND that store's own consent flag is set. Everything else
 // — the raw query_log/behavior_events ledgers, ephemeral session context, and
-// global trending — is populated regardless and is anonymized/pruned separately.
+// global trending — is populated regardless, and is deleted on a history
+// deletion or pruned by retention separately.
 //
 // The intake path uses exactly these predicates; exposing them lets the rule be
 // unit-tested without a database (the CRITICAL guarantee: an event without its

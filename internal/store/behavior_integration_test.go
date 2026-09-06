@@ -346,7 +346,7 @@ func TestIntegrationProjectionFallsBackToAllowHistoryWhenFieldAbsent(t *testing.
 }
 
 // TestIntegrationHistoryEndpointsAndPurge covers list, per-entry delete, clear
-// (with anonymization), and full user purge.
+// (deleting the raw ledger rows), and full user purge.
 func TestIntegrationHistoryEndpointsAndPurge(t *testing.T) {
 	env := newTestEnv(t)
 	ctx := context.Background()
@@ -386,7 +386,9 @@ func TestIntegrationHistoryEndpointsAndPurge(t *testing.T) {
 		t.Errorf("after entry delete expected 1 history row, got %d", n)
 	}
 
-	// Clear all: history gone, raw logs anonymized, projection still present.
+	// Clear all: history gone, the raw ledger rows DELETED (not orphaned with a
+	// NULL user_id — that is what turned one account's sessions into N anonymous
+	// subjects and published what the k-floor was suppressing), projection kept.
 	if err := env.history.ClearAll(ctx, u); err != nil {
 		t.Fatalf("clear all: %v", err)
 	}
@@ -394,10 +396,16 @@ func TestIntegrationHistoryEndpointsAndPurge(t *testing.T) {
 		t.Errorf("clear all must remove history, got %d rows", n)
 	}
 	if n := countRows(t, env, "SELECT count(*) FROM search.query_log WHERE user_id = $1", u); n != 0 {
-		t.Errorf("clear all must anonymize query_log user_id, got %d rows still referencing user", n)
+		t.Errorf("clear all must delete the user's query_log rows, got %d still referencing user", n)
 	}
 	if n := countRows(t, env, "SELECT count(*) FROM search.behavior_events WHERE user_id = $1", u); n != 0 {
-		t.Errorf("clear all must anonymize behavior_events user_id, got %d rows", n)
+		t.Errorf("clear all must delete the user's behavior_events, got %d", n)
+	}
+	if n := countRows(t, env, "SELECT count(*) FROM search.query_log WHERE session_id = 's1'"); n != 0 {
+		t.Errorf("clear all left %d orphaned query_log rows in the user's session", n)
+	}
+	if n := countRows(t, env, "SELECT count(*) FROM search.behavior_events WHERE session_id = 's1'"); n != 0 {
+		t.Errorf("clear all left %d orphaned behavior_events in the user's session", n)
 	}
 	if n := countRows(t, env, "SELECT count(*) FROM search.user_watch_projection WHERE user_id = $1", u); n != 1 {
 		t.Errorf("clear all (search scope) must keep the watch projection, got %d", n)
