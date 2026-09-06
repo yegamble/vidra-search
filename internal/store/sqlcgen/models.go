@@ -103,15 +103,17 @@ type SearchModel struct {
 }
 
 type SearchQueryAggregate struct {
-	NormalizedQuery string    `json:"normalized_query"`
-	DisplayQuery    string    `json:"display_query"`
-	TotalCount      int64     `json:"total_count"`
-	DistinctUsers   int32     `json:"distinct_users"`
-	DecayedFreq     float64   `json:"decayed_freq"`
-	FirstSeen       time.Time `json:"first_seen"`
-	LastSeen        time.Time `json:"last_seen"`
-	Suggestible     bool      `json:"suggestible"`
-	Banned          bool      `json:"banned"`
+	NormalizedQuery string `json:"normalized_query"`
+	DisplayQuery    string `json:"display_query"`
+	// Searches for this query the instance STILL HOLDS inside EVENT_RETENTION_DAYS, recomputed from search.query_log by the rollup (queries with new traffic) and by suggestible_reeval (every row, daily). Not cumulative -- migration 0006's decay-then-increment description is superseded.
+	TotalCount    int64 `json:"total_count"`
+	DistinctUsers int32 `json:"distinct_users"`
+	// Recency-weighted popularity and the ORDER of the aggregate autosuggest stream: sum over the RETAINED query_log rows of 2^(-age/half-life), anchored on this query's own last_seen, at SEARCH_QUERY_HALF_LIFE_HOURS. Recomputed, not accumulated, so searches this instance has deleted cannot keep buying a completion its rank.
+	DecayedFreq float64   `json:"decayed_freq"`
+	FirstSeen   time.Time `json:"first_seen"`
+	LastSeen    time.Time `json:"last_seen"`
+	Suggestible bool      `json:"suggestible"`
+	Banned      bool      `json:"banned"`
 }
 
 type SearchQueryLog struct {
@@ -126,6 +128,7 @@ type SearchQueryLog struct {
 	SubjectID       *string     `json:"subject_id"`
 }
 
+// Per-(query, video) engagement counters, RECOMPUTED from the retained search.behavior_events on every engagement_rollup pass (clear + rebuild, no cursor). NOT cumulative -- migration 0009's description of a cursor fold is superseded. Read live: SearchAdvancedRecall recalls candidates on clicks > 0 and feeds impressions/clicks/meaningful_watches into the stage-2 CTR and meaningful-watch-rate features, so a counter that outlived its evidence kept a deleted click ranking a video.
 type SearchQueryVideoEngagement struct {
 	NormalizedQuery   string    `json:"normalized_query"`
 	VideoID           uuid.UUID `json:"video_id"`
