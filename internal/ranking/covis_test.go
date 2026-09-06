@@ -49,3 +49,34 @@ func TestCovisBlendMatchesSQLReference(t *testing.T) {
 }
 
 func approx(a, b, tol float64) bool { return math.Abs(a-b) <= tol }
+
+// TestCovisBlendFlooredZeroesBelowFloorSources mirrors the k-anonymity floor the
+// neighbour rebuild applies: each SOURCE's contribution is zeroed when that
+// source's pair support is below the floor, and an edge left at 0 is not
+// published at all (the rebuild's `score > 0`).
+func TestCovisBlendFlooredZeroesBelowFloorSources(t *testing.T) {
+	cw := CovisShrunkCosine(3, 3, 3, CovisLambdaDefault) // 3/13
+	cs := CovisShrunkCosine(1, 1, 1, CovisLambdaDefault) // 1/11
+
+	// Both sources clear the floor: the plain blend.
+	if got := CovisBlendFloored(cw, cs, 3, 3, 3); !approx(got, CovisBlend(cw, cs), 1e-12) {
+		t.Errorf("at the floor the score must be the unchanged blend: got %v want %v", got, CovisBlend(cw, cs))
+	}
+	// Co-search below the floor: its term contributes nothing, the co-watch term
+	// is untouched (0.7 · 3/13 = 0.16154, the A13 fixture's score).
+	if got := CovisBlendFloored(cw, cs, 3, 1, 3); !approx(got, 0.7*3.0/13, 1e-12) {
+		t.Errorf("a below-floor co-search must contribute nothing: got %v want %v", got, 0.7*3.0/13)
+	}
+	// Co-watch below the floor: only the co-search term survives.
+	if got := CovisBlendFloored(cw, cs, 1, 3, 3); !approx(got, 0.3*cs, 1e-12) {
+		t.Errorf("a below-floor co-watch must contribute nothing: got %v want %v", got, 0.3*cs)
+	}
+	// Neither source clears it: score 0, so the edge is never published.
+	if got := CovisBlendFloored(cw, cs, 1, 1, 3); got != 0 {
+		t.Errorf("an edge below the floor on both sources must score exactly 0 (unpublishable), got %v", got)
+	}
+	// A floor of 1 is the pre-ruling behaviour: everything with evidence publishes.
+	if got := CovisBlendFloored(cw, cs, 1, 1, 1); !approx(got, CovisBlend(cw, cs), 1e-12) {
+		t.Errorf("floor 1 must publish every pair with evidence: got %v want %v", got, CovisBlend(cw, cs))
+	}
+}
