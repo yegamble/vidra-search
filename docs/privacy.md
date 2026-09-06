@@ -64,10 +64,16 @@ co-visited it, counted by the identical expression — the account id when signe
 in, else `subject_id`, else `session_id`. Shrinkage was never this gate:
 `cooc/(cooc+λ)` ranks a one-person pair low, it still publishes it, and on a quiet
 instance low is first. Support is recomputed from the retained `behavior_events`
-each pass, never from the cumulative `co_watch`/`co_search` counters — those hold
-visits rather than people (six co-visits by one subject is `count = 6`) and are
-never pruned, so an edge read out of them would outlive the evidence retention
-deleted. The honest cost is the mirror of trending's: on a small or quiet
+each pass, and so is **the score**: the co-occurrence counts and the cosine's
+normalization mass come out of the same pairing of the same retained rows as the
+subject count. The cumulative `co_watch`/`co_search` counters that used to supply
+them are retired (migration `0017` says so on the tables) — they held visits
+rather than people (six co-visits by one subject was `count = 6`), and nothing
+ever pruned them, so a published score outlived the events it was computed from
+by an unbounded margin and a user's deletion could not reach it. Deleting the
+evidence now moves the number: an event that ages out, or that a purge removes,
+stops contributing on the next rollup, to the score and not only to the gate.
+The honest cost is the mirror of trending's: on a small or quiet
 instance, real associations now fail the gate and the related rail thins or
 empties rather than ranking lower; `docs/operations.md` names the symptom and the
 query that confirms it is the floor and not a broken rollup.

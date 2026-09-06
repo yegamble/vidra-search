@@ -15,15 +15,17 @@ import (
 
 // covisPairPredicate is the sessionized pairing predicate: a NEW event is paired
 // only with an EARLIER event of the same session on a DIFFERENT video inside the
-// co-visitation window. It must appear identically in all FOUR places
-// covisitation.sql pairs events: the two accumulators that count the pair, and
-// the two floor-support CTEs that decide whether that pair may be published.
+// co-visitation window. It must appear identically in BOTH places covisitation.sql
+// pairs events — the co-watch CTE and the co-search CTE.
 //
-// If the accumulator and its floor disagree about what a co-visit IS, the floor
-// gates a different set of pairs than the counters counted — which shows up as
-// edges that are published with too little support (the floor pairs more loosely
-// than the counter) or real edges silently missing (it pairs more tightly), and
-// in neither case does anything fail.
+// It used to have to appear four times, because the two cumulative accumulators
+// paired the ledger to COUNT a pair and the two support CTEs paired it again to
+// decide whether that pair could be published; a disagreement between them
+// published edges with too little support, or silently dropped real ones, and
+// nothing failed. The counts now come out of the same CTE as the support, so that
+// divergence is impossible by construction and this guard is left with the one
+// that is not: the co-watch and co-search halves must pair the ledger the same
+// way, apart from co-search's extra same-query clause.
 const covisPairPredicate = "     AND p.id < n.id\n" +
 	"     AND p.video_id <> n.video_id\n" +
 	"     AND abs(EXTRACT(EPOCH FROM (n.occurred_at - p.occurred_at))) <= @window_seconds::double precision"
@@ -57,13 +59,13 @@ func TestCovisFloorCountsIdenticallyToAutosuggest(t *testing.T) {
 	}
 }
 
-// TestCovisFloorPairsExactlyLikeTheAccumulators pins the other half: the floor's
-// notion of a co-visit is the accumulators' notion of a co-visit.
-func TestCovisFloorPairsExactlyLikeTheAccumulators(t *testing.T) {
-	if got := strings.Count(covisSQL(t), covisPairPredicate); got != 4 {
-		t.Errorf("covisitation.sql contains the shared pairing predicate %d time(s), want 4 "+
-			"(AccumulateCoWatch, AccumulateCoSearch, and the co-watch + co-search floor support CTEs).\n"+
-			"Expected exactly:\n%s", got, covisPairPredicate)
+// TestCovisPairsBothSourcesIdentically pins the other half: the two blended
+// sources agree on what a co-visit IS.
+func TestCovisPairsBothSourcesIdentically(t *testing.T) {
+	if got := strings.Count(covisSQL(t), covisPairPredicate); got != 2 {
+		t.Errorf("covisitation.sql contains the shared pairing predicate %d time(s), want 2 "+
+			"(the co-watch and co-search pair CTEs, each producing that source's counts AND "+
+			"its floor support).\nExpected exactly:\n%s", got, covisPairPredicate)
 	}
 }
 
@@ -76,8 +78,18 @@ func TestCovisFloorPairsExactlyLikeTheAccumulators(t *testing.T) {
 // this catches the reference itself, including one added for the normalization
 // mass, where the effect on any single score is small enough to look like drift.
 func TestCovisRebuildReadsOnlyTheRetainedLedger(t *testing.T) {
+	// Comments are stripped first: the file explains at length what the counters
+	// were and why they are gone, and a guard that read its own prose as a
+	// reference would be unfixable without deleting the explanation.
+	lines := strings.Split(covisSQL(t), "\n")
+	for i, line := range lines {
+		if c := strings.Index(line, "--"); c >= 0 {
+			lines[i] = line[:c]
+		}
+	}
+	code := strings.Join(lines, "\n")
 	for _, table := range []string{"search.co_watch", "search.co_search"} {
-		if strings.Contains(covisSQL(t), table) {
+		if strings.Contains(code, table) {
 			t.Errorf("covisitation.sql references %s. The co-visitation counters are RETIRED: "+
 				"they are cumulative and nothing prunes them, so a score read from them keeps "+
 				"counting co-visits retention (or a user's purge) has already deleted. Pair "+

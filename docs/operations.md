@@ -118,36 +118,69 @@ are idempotent.
 W3 adds four more loops (wired as generic periodic jobs; also runnable one-shot
 via `SEARCH_RUN_JOB=<name>`):
 
-- `covis_rollup` (15m; the ACCUMULATION is cursor-based, the rebuild is not) —
-  folds sessionized co-watch/co-search pairs into the cumulative counters and
-  rebuilds the `item_neighbors` shrunk-cosine index (λ=`SEARCH_COVIS_LAMBDA`=10,
-  top-M=`SEARCH_COVIS_TOP_M`=100, window `SEARCH_COVIS_WINDOW_SECONDS`=3600).
+- `covis_rollup` (15m; a full rebuild every pass, no cursor) — re-pairs the
+  RETAINED `behavior_events` into sessionized co-watch/co-search pairs and
+  rebuilds the `item_neighbors` shrunk-cosine index from them
+  (λ=`SEARCH_COVIS_LAMBDA`=10, top-M=`SEARCH_COVIS_TOP_M`=100, window
+  `SEARCH_COVIS_WINDOW_SECONDS`=3600).
   - **It carries the k-anonymity floor**, and on `MIN_QUERY_USER_COUNT` — the
     same knob autosuggest and trending gate on, not a separate one. A pair is
     published only once that many distinct subjects co-visited it, so raising the
     floor for autosuggest also thins the related rail. On a quiet instance the
-    visible symptom is an EMPTY related/"watch next" rail in advanced mode with a
-    healthy `search.co_watch`: the counters are counting, the pairs just have
-    fewer than `MIN_QUERY_USER_COUNT` people behind them. Confirm it before
-    touching anything else:
+    visible symptom is an EMPTY related/"watch next" rail in advanced mode while
+    the ledger is full of co-visits: the pairs just have fewer than
+    `MIN_QUERY_USER_COUNT` people behind them. Confirm it before touching
+    anything else — the first query is the pair count the rollup itself computes,
+    read straight off the ledger:
     ```sql
-    SELECT count(*) AS pairs FROM search.co_watch;
+    WITH ev AS (
+      SELECT id, session_id, video_id, occurred_at FROM search.behavior_events
+       WHERE type IN ('video.play_started', 'video.meaningful_watch')
+         AND session_id IS NOT NULL AND video_id IS NOT NULL)
+    SELECT count(*) AS pairs FROM (
+      SELECT DISTINCT least(n.video_id, p.video_id), greatest(n.video_id, p.video_id)
+        FROM ev n JOIN ev p
+          ON p.session_id = n.session_id AND p.id < n.id AND p.video_id <> n.video_id
+         AND abs(extract(epoch FROM (n.occurred_at - p.occurred_at))) <= 3600) d;
     SELECT count(*) AS published FROM search.item_neighbors WHERE model_version='covis-v1';
     ```
     A large `pairs` with `published` at 0 is the floor doing its job on a small
-    audience, not a broken rollup.
-  - **The rebuild runs every pass even with no new events**, because the floor is
-    recomputed from the RETAINED `behavior_events` rather than from the
-    cumulative counters (which hold visits, not people, and are never pruned).
-    That is what makes an edge disappear once retention deletes the evidence
-    behind it — and it is the expensive half of the job: the support CTEs re-pair
-    the retained ledger every pass where the accumulators only pair the new cursor
-    slice against it. The work is bounded by session size, not table size, since
-    pairs only form within one `session_id`; if this loop starts overrunning the
-    worker's 2-minute job timeout (`worker: job failed` with a context deadline
-    in the logs, and a flat `vidra_search_rollup_duration_seconds{worker="covis_rollup"}`),
-    lower `EVENT_RETENTION_DAYS` or raise `SEARCH_COVIS_INTERVAL` before reaching
-    for the floor.
+    audience, not a broken rollup. (`search.co_watch` / `search.co_search` used to
+    answer the first question; they are **retired** as of migration `0017` —
+    nothing reads or writes them, and they are dropped a release later. A `SELECT`
+    on them now returns whatever was in them when the last accumulating release
+    stopped, which is why the query above goes to the ledger instead.)
+  - **The rebuild runs every pass even with no new events, and everything it
+    publishes is a function of the retained ledger alone** — the co-occurrence
+    counts and the cosine's normalization mass as well as the floor's subject
+    counts. That is what makes an edge disappear, or its score fall, once
+    retention deletes the evidence behind it. Until `0017` the counts came from
+    cumulative counters nothing pruned, so a score kept counting co-visits the
+    instance had already deleted.
+  - **Cost.** Two self-joins of the retained ledger, one per source, bounded by
+    **session size × retained sessions** — never by lifetime volume, because pairs
+    only form inside one `session_id` and the ledger is capped by
+    `EVENT_RETENTION_DAYS`. Measured on a throwaway `postgres:18-alpine` on a
+    laptop, one pass over a synthetic retained ledger:
+
+    | retained ledger | distinct pairs | per pass |
+    | --- | --- | --- |
+    | 200k events, 40k sessions × 5 | 20k | ~0.6 s |
+    | 400k events, 80k sessions × 5 | 20k | ~1.3 s |
+    | 200k events, 10k sessions × 20 | 95k | ~2.9 s |
+
+    Linear in retained events at fixed session length; the quadratic term is
+    session LENGTH (a session of *k* events contributes *k(k−1)/2* pairs), which
+    is why the middle row and the last row hold the same number of rows and differ
+    fivefold. This is not new work: the support CTEs have re-paired the ledger
+    every pass since the floor shipped, and dropping the cursor pass makes the job
+    measurably cheaper than before (same fixtures: 0.66 → 0.61 s and 3.05 → 2.88 s
+    for the rebuild, plus a whole accumulation pass no longer run at all).
+    If this loop starts overrunning the worker's 2-minute job timeout
+    (`worker: job failed` with a context deadline in the logs, and a flat
+    `vidra_search_rollup_duration_seconds{worker="covis_rollup"}`), lower
+    `EVENT_RETENTION_DAYS` or raise `SEARCH_COVIS_INTERVAL` before reaching for the
+    floor.
 - `model_loader` (1m) — hot-swaps the active learned ranker (checksum-verified)
   behind an atomic pointer; a bad artifact keeps the previous model/heuristic.
 - `shadow_eval` (1h) — scores shadow rankers over recent impressions

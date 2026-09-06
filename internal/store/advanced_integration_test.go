@@ -78,9 +78,11 @@ func TestIntegrationCovisRollupToAdvancedRelated(t *testing.T) {
 
 	runWorker(t, env, "covis_rollup")
 
-	// co_watch + item_neighbors are populated.
-	if n := countRows(t, env, "SELECT count(*) FROM search.co_watch"); n == 0 {
-		t.Fatalf("expected co_watch pairs, got 0")
+	// The ledger holds co-watched pairs and item_neighbors is populated from them.
+	// (Read off behavior_events: the cumulative co_watch counter was retired when
+	// the rollup started recomputing from the retained ledger every pass.)
+	if n := covisWatchPairs(t, env); n == 0 {
+		t.Fatalf("expected co-watched pairs in the ledger, got 0")
 	}
 	if n := countRows(t, env, "SELECT count(*) FROM search.item_neighbors WHERE video_id = $1", va.ID); n == 0 {
 		t.Fatalf("expected item_neighbors for va, got 0")
