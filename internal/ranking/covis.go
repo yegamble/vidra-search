@@ -39,3 +39,27 @@ func CovisShrunkCosine(cooc, totI, totJ, lambda float64) float64 {
 func CovisBlend(coWatchCosine, coSearchCosine float64) float64 {
 	return CovisBlendCoWatch*coWatchCosine + CovisBlendCoSearch*coSearchCosine
 }
+
+// CovisBlendFloored is the PUBLISHED neighbor score: the blend with each source's
+// contribution zeroed when fewer than minSubjects distinct subjects co-visited
+// that pair through that source. minSubjects is autosuggest's k-anonymity floor
+// (`minimum_query_user_count`), reused rather than duplicated — item_neighbors is
+// a globally-served index, so publishing an edge one person's session produced
+// tells every viewer something about that person.
+//
+// Shrinkage is NOT this gate: cooc/(cooc+lambda) ranks a one-person pair low, it
+// still publishes it, and on a quiet instance low is first.
+//
+// The two sources are floored independently so a below-floor co-search can
+// neither publish an edge alone nor inflate one the co-watch half earned. A pair
+// below the floor on both scores exactly 0, and the rebuild publishes only
+// score > 0 — so 0 here means "not in the index at all".
+func CovisBlendFloored(coWatchCosine, coSearchCosine float64, coWatchSubjects, coSearchSubjects, minSubjects int) float64 {
+	if coWatchSubjects < minSubjects {
+		coWatchCosine = 0
+	}
+	if coSearchSubjects < minSubjects {
+		coSearchCosine = 0
+	}
+	return CovisBlend(coWatchCosine, coSearchCosine)
+}

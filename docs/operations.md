@@ -118,10 +118,36 @@ are idempotent.
 W3 adds four more loops (wired as generic periodic jobs; also runnable one-shot
 via `SEARCH_RUN_JOB=<name>`):
 
-- `covis_rollup` (15m, cursor-based) — folds sessionized co-watch/co-search pairs
-  into the cumulative counters and rebuilds the `item_neighbors` shrunk-cosine
-  index (λ=`SEARCH_COVIS_LAMBDA`=10, top-M=`SEARCH_COVIS_TOP_M`=100, window
-  `SEARCH_COVIS_WINDOW_SECONDS`=3600).
+- `covis_rollup` (15m; the ACCUMULATION is cursor-based, the rebuild is not) —
+  folds sessionized co-watch/co-search pairs into the cumulative counters and
+  rebuilds the `item_neighbors` shrunk-cosine index (λ=`SEARCH_COVIS_LAMBDA`=10,
+  top-M=`SEARCH_COVIS_TOP_M`=100, window `SEARCH_COVIS_WINDOW_SECONDS`=3600).
+  - **It carries the k-anonymity floor**, and on `MIN_QUERY_USER_COUNT` — the
+    same knob autosuggest and trending gate on, not a separate one. A pair is
+    published only once that many distinct subjects co-visited it, so raising the
+    floor for autosuggest also thins the related rail. On a quiet instance the
+    visible symptom is an EMPTY related/"watch next" rail in advanced mode with a
+    healthy `search.co_watch`: the counters are counting, the pairs just have
+    fewer than `MIN_QUERY_USER_COUNT` people behind them. Confirm it before
+    touching anything else:
+    ```sql
+    SELECT count(*) AS pairs FROM search.co_watch;
+    SELECT count(*) AS published FROM search.item_neighbors WHERE model_version='covis-v1';
+    ```
+    A large `pairs` with `published` at 0 is the floor doing its job on a small
+    audience, not a broken rollup.
+  - **The rebuild runs every pass even with no new events**, because the floor is
+    recomputed from the RETAINED `behavior_events` rather than from the
+    cumulative counters (which hold visits, not people, and are never pruned).
+    That is what makes an edge disappear once retention deletes the evidence
+    behind it — and it is the expensive half of the job: the support CTEs re-pair
+    the retained ledger every pass where the accumulators only pair the new cursor
+    slice against it. The work is bounded by session size, not table size, since
+    pairs only form within one `session_id`; if this loop starts overrunning the
+    worker's 2-minute job timeout (`worker: job failed` with a context deadline
+    in the logs, and a flat `vidra_search_rollup_duration_seconds{worker="covis_rollup"}`),
+    lower `EVENT_RETENTION_DAYS` or raise `SEARCH_COVIS_INTERVAL` before reaching
+    for the floor.
 - `model_loader` (1m) — hot-swaps the active learned ranker (checksum-verified)
   behind an atomic pointer; a bad artifact keeps the previous model/heuristic.
 - `shadow_eval` (1h) — scores shadow rankers over recent impressions

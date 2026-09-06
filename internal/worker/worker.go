@@ -520,15 +520,30 @@ func (r *Runner) sessionizer(ctx context.Context) error {
 // --- covis_rollup ---
 
 // covisRollup folds new behavioral events into the cumulative co-visitation
-// counters and rebuilds the served neighbor index. It is cursor-based over
-// behavior_events (like the other rollups): each pass counts sessionized
+// counters and rebuilds the served neighbor index. Accumulation is cursor-based
+// over behavior_events (like the other rollups): each pass counts sessionized
 // co-watch (play_started/meaningful_watch) and co-search (result_clicked sharing
-// a query) pairs whose two events fall within the window, then recomputes
-// shrunk-cosine neighbors (blend 0.7 co_watch / 0.3 co_search, λ shrinkage,
-// top-M per item). Accumulation, rebuild, and the cursor advance share one
-// transaction, so a crash resumes rather than double counts. Deterministic given
-// the same events.
+// a query) pairs whose two events fall within the window. The rebuild then
+// recomputes shrunk-cosine neighbors (blend 0.7 co_watch / 0.3 co_search, λ
+// shrinkage, top-M per item) for every pair that clears the k-anonymity floor.
+// Accumulation, rebuild, and the cursor advance share one transaction, so a
+// crash resumes rather than double counts. Deterministic given the same events.
+//
+// The floor is autosuggest's `minimum_query_user_count` (env MIN_QUERY_USER_COUNT,
+// service_config overlay wins) and not a knob of its own: item_neighbors is a
+// globally-served index, so the k-anonymity argument that keeps a rare query out
+// of autosuggest applies to a rare video PAIR verbatim, and an operator who
+// raises the floor means it about both.
+//
+// Only the ACCUMULATION is skipped when no new events arrived. The rebuild runs
+// every pass because it is no longer a pure function of the counters: the floor
+// is recomputed from the RETAINED event ledger, which retention shrinks without
+// writing a single new event. Returning early there would leave an edge
+// published on evidence the instance has already deleted.
 func (r *Runner) covisRollup(ctx context.Context) error {
+	ov := r.overlay(ctx)
+	minSubjects := overlayInt(ov, "minimum_query_user_count", r.cfg.MinQueryUserCount)
+
 	tx, err := r.store.Begin(ctx)
 	if err != nil {
 		return err
@@ -544,27 +559,34 @@ func (r *Runner) covisRollup(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if maxid <= cursor {
-		return tx.Commit(ctx)
+
+	if maxid > cursor {
+		if err := q.AccumulateCoWatch(ctx, sqlcgen.AccumulateCoWatchParams{
+			Cursor: cursor, Maxid: maxid, WindowSeconds: r.cfg.CovisWindowSeconds,
+		}); err != nil {
+			return err
+		}
+		if err := q.AccumulateCoSearch(ctx, sqlcgen.AccumulateCoSearchParams{
+			Cursor: cursor, Maxid: maxid, WindowSeconds: r.cfg.CovisWindowSeconds,
+		}); err != nil {
+			return err
+		}
 	}
 
-	if err := q.AccumulateCoWatch(ctx, sqlcgen.AccumulateCoWatchParams{
-		Cursor: cursor, Maxid: maxid, WindowSeconds: r.cfg.CovisWindowSeconds,
-	}); err != nil {
-		return err
-	}
-	if err := q.AccumulateCoSearch(ctx, sqlcgen.AccumulateCoSearchParams{
-		Cursor: cursor, Maxid: maxid, WindowSeconds: r.cfg.CovisWindowSeconds,
-	}); err != nil {
-		return err
-	}
-
-	// Recompute the served covis-v1 neighbor index from the current counters.
+	// Recompute the served covis-v1 neighbor index from the current counters,
+	// keeping only the pairs the retained ledger still shows ≥ minSubjects
+	// distinct subjects behind.
 	if err := q.ClearCovisNeighbors(ctx); err != nil {
 		return err
 	}
 	if err := q.RebuildCovisNeighbors(ctx, sqlcgen.RebuildCovisNeighborsParams{
-		Lambda: r.cfg.CovisLambda, TopM: int32(r.cfg.CovisTopM),
+		Lambda:      r.cfg.CovisLambda,
+		TopM:        int32(r.cfg.CovisTopM),
+		MinSubjects: int32(minSubjects),
+
+		// The floor's pairing predicate is the accumulators' — same session, same
+		// window — so it must be given the same window.
+		WindowSeconds: r.cfg.CovisWindowSeconds,
 	}); err != nil {
 		return err
 	}

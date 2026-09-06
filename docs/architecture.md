@@ -77,6 +77,15 @@ event pipeline.
   0.7 co_watch / 0.3 co_search, top-100 neighbors per item. Serving a related feed
   is then one indexed range scan. The math lives in `ranking.CovisShrunkCosine`
   (a unit-tested mirror of the `RebuildCovisNeighbors` SQL).
+  A pair is **published only once ≥ `MIN_QUERY_USER_COUNT` distinct subjects
+  co-visited it** — autosuggest's k-anonymity floor, reused rather than
+  duplicated, counting the same identity (user id, else `subject_id`, else
+  `session_id`) and floored per source so a below-floor co_search neither
+  publishes an edge alone nor inflates one co_watch earned
+  (`ranking.CovisBlendFloored`). Support is recomputed from the retained
+  `behavior_events` each pass, not read off the counters (which hold visits, not
+  people, and are never pruned), so the rebuild runs on EVERY pass — only the
+  accumulation is cursor-gated.
 - **Advanced search.** Stage-1 SQL recall (`SearchAdvancedRecall`, ≤500) unions
   the simple hybrid recall with the query's top-clicked videos and returns rich
   per-doc + engagement columns. Stage-2 is a Go rerank (`ranking.Rerank`) over a
