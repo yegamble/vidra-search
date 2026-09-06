@@ -366,3 +366,58 @@ func TestIntegrationEngagementRetractsAPurgedUsersClicks(t *testing.T) {
 			"counter is a place the clearer's contribution outlives their deletion", c)
 	}
 }
+
+// TestIntegrationReevaluationIsIdempotentOverTheCounters pins the convergence
+// property the daily pass's bounded loop depends on: a row it has fixed does not
+// come back. That loop has no cursor — it relies on every batch selecting ONLY
+// rows whose values actually move, so the remaining work strictly shrinks. Adding
+// the popularity counters to that predicate is where it could have been lost, and
+// it is why the predicate is exact integers only: a float compared for equality
+// every pass is how a repair loop starts churning on rounding for ever.
+func TestIntegrationReevaluationIsIdempotentOverTheCounters(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	now := time.Now()
+
+	// A spread of shapes: above the floor, below it, and one with rows at several
+	// timestamps so decayed_freq is not a whole number.
+	searchedByAt(t, env, now, "idem plenty", 5)
+	searchedByAt(t, env, now, "idem sparse", 1)
+	clearer := uuid.New()
+	for i := 0; i < 4; i++ {
+		u := uuid.New()
+		ingest(t, env, submitted(now.Add(-time.Duration(i)*17*time.Hour), "idem spread", &u, "", false))
+	}
+	ingest(t, env,
+		submitted(now, "idem plenty", &clearer, "idem-c", true),
+		submitted(now.Add(time.Second), "idem spread", &clearer, "idem-c", true))
+	runWorker(t, env, "aggregates_rollup")
+
+	// Give the first pass real work: the clearer's rows go and no further traffic
+	// arrives, so only the daily pass can notice. Without this the test would be
+	// vacuous — two passes that both change nothing prove nothing about
+	// convergence.
+	if err := env.history.ClearAll(ctx, clearer); err != nil {
+		t.Fatalf("ClearAll: %v", err)
+	}
+
+	first, err := env.worker.ReevaluateSuggestible(ctx, false)
+	if err != nil {
+		t.Fatalf("first re-evaluation: %v", err)
+	}
+	if first.Changed == 0 {
+		t.Fatalf("fixture: the first re-evaluation must have work to do after the clear, moved 0 rows")
+	}
+	second, err := env.worker.ReevaluateSuggestible(ctx, false)
+	if err != nil {
+		t.Fatalf("second re-evaluation: %v", err)
+	}
+	if second.Changed != 0 {
+		t.Errorf("a second re-evaluation over an unchanged ledger moved %d row(s) (the first moved %d). "+
+			"The pass must converge: its batch loop is bounded only by the fact that a row it fixes cannot "+
+			"be selected again", second.Changed, first.Changed)
+	}
+	for _, nq := range []string{"idem plenty", "idem sparse", "idem spread"} {
+		assertAggregateMatchesLedger(t, env, nq, "after two re-evaluation passes")
+	}
+}
