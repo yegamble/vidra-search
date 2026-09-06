@@ -1,0 +1,24 @@
+-- 0017: retire the cumulative co-visitation counters.
+--
+-- search.co_watch / search.co_search were written by covis_rollup as it folded
+-- new behavior_events forward through a cursor, and they were the input to the
+-- shrunk-cosine scores in search.item_neighbors. Nothing ever pruned them, so a
+-- co-visit kept contributing to the score of every surviving pair long after
+-- retention deleted both of its events, and a user purge could not reach it. The
+-- rollup now recomputes counts, normalization mass and the k-anonymity floor from
+-- the retained ledger in one pass, so NOTHING reads or writes these two tables.
+--
+-- They are not dropped here, and that is the one-release schema-compat policy
+-- rather than caution: the previous release still INSERTs into them, and
+-- scripts/migrate-lint.sh refuses destructive DDL in a forward migration for
+-- exactly that reason -- dropping them now would turn a rollback from a tag flip
+-- into a database restore. So this migration only says so ON THE TABLES, where
+-- psql \d+ and every schema browser will show it, because a populated table with
+-- a primary key and no comment looks live. The drop is a two-line 0018 in the
+-- NEXT release, when no supported release writes them any more.
+--
+-- The rows left behind are inert: unread aggregate pair counts with no identity
+-- in them (video_a, video_b, count). An operator who wants them gone before the
+-- drop can DELETE from both tables at any time without affecting what is served.
+COMMENT ON TABLE search.co_watch IS 'RETIRED (0017): no longer read or written. Co-visitation counts are recomputed from the retained search.behavior_events ledger each covis_rollup pass, because these cumulative counters were never pruned and outlived the events they came from. Kept only so the previous release can still run against this schema; dropped in the next release.';
+COMMENT ON TABLE search.co_search IS 'RETIRED (0017): no longer read or written. See search.co_watch -- same story for the co-search half of the blend.';

@@ -69,23 +69,29 @@ Advanced mode (gated by the instance `search_mode`; simple stays the zero-data
 default) adds a **two-stage funnel** and learned-model serving on top of the same
 event pipeline.
 
-- **Co-visitation.** The `covis_rollup` worker (15m, cursor-based) folds
-  sessionized co-occurrence into cumulative `co_watch` (plays/meaningful-watches
-  in one session) and `co_search` (results clicked for one query in a session)
-  counters, then rebuilds `item_neighbors` as the **shrunk-cosine** similarity
-  (`raw = cooc/√(totᵢ·totⱼ)`, `shrunk = raw·cooc/(cooc+λ)`, λ=10) blended
-  0.7 co_watch / 0.3 co_search, top-100 neighbors per item. Serving a related feed
-  is then one indexed range scan. The math lives in `ranking.CovisShrunkCosine`
-  (a unit-tested mirror of the `RebuildCovisNeighbors` SQL).
+- **Co-visitation.** The `covis_rollup` worker (15m) rebuilds `item_neighbors`
+  from scratch every pass out of the **currently retained `behavior_events`**: it
+  pairs sessionized co-watch (plays/meaningful-watches in one session) and
+  co-search (results clicked for one query in a session) events once per source,
+  and takes the co-occurrence counts, the normalization mass and the floor's
+  subject counts from that one pairing. Neighbours are the **shrunk-cosine**
+  similarity (`raw = cooc/√(totᵢ·totⱼ)`, `shrunk = raw·cooc/(cooc+λ)`, λ=10)
+  blended 0.7 co-watch / 0.3 co-search, top-100 neighbors per item; serving a
+  related feed is then one indexed range scan. The math lives in
+  `ranking.CovisShrunkCosine` (a unit-tested mirror of the
+  `RebuildCovisNeighbors` SQL).
   A pair is **published only once ≥ `MIN_QUERY_USER_COUNT` distinct subjects
   co-visited it** — autosuggest's k-anonymity floor, reused rather than
   duplicated, counting the same identity (user id, else `subject_id`, else
-  `session_id`) and floored per source so a below-floor co_search neither
-  publishes an edge alone nor inflates one co_watch earned
-  (`ranking.CovisBlendFloored`). Support is recomputed from the retained
-  `behavior_events` each pass, not read off the counters (which hold visits, not
-  people, and are never pruned), so the rebuild runs on EVERY pass — only the
-  accumulation is cursor-gated.
+  `session_id`) and floored per source so a below-floor co-search neither
+  publishes an edge alone nor inflates one co-watch earned
+  (`ranking.CovisBlendFloored`).
+  There is **no cursor and no accumulator**: the counts used to live in cumulative
+  `co_watch` / `co_search` tables nothing ever pruned, so a score kept counting
+  co-visits retention had deleted and a user purge could not reach them. Those
+  tables are retired (migration `0017` marks them; dropped a release later) and
+  the ledger is the single source of truth, which is what makes retention and
+  deletion move the published score and not just the gate.
 - **Advanced search.** Stage-1 SQL recall (`SearchAdvancedRecall`, ≤500) unions
   the simple hybrid recall with the query's top-clicked videos and returns rich
   per-doc + engagement columns. Stage-2 is a Go rerank (`ranking.Rerank`) over a
@@ -134,11 +140,13 @@ event pipeline.
 - Behavioral tables (W2): `query_log`, `query_aggregates`, `behavior_events`,
   `user_search_history`, `user_watch_projection`, `query_video_engagement`, and
   `worker_cursors` (rollup bookmarks).
-- Advanced tables (W3): `co_watch` / `co_search` (cumulative co-occurrence
-  counters, normalized `video_a < video_b`), `item_neighbors` (derived
-  shrunk-cosine neighbor index, one indexed range scan per related feed), `models`
+- Advanced tables (W3): `item_neighbors` (derived shrunk-cosine neighbor index,
+  rebuilt from the retained event ledger each pass, one indexed range scan per
+  related feed), `models`
   (the ranker registry: kind/version/status/artifact/metrics), and `experiments`
-  (hash-bucketed variant definitions, cached in RAM).
+  (hash-bucketed variant definitions, cached in RAM). `co_watch` / `co_search`
+  (cumulative co-occurrence counters, normalized `video_a < video_b`) still exist
+  but are **retired** — nothing reads or writes them; see migration `0017`.
 - Redis holds the short-prefix suggestion cache (TTL 60s, prefixes ≤3 chars),
   per-session recency lists (`sess:q` / `sess:v`, 2h TTL), the trending ZSETs +
   per-day HLL/count keys, and the gated `trend:{q,v}:top` lists.

@@ -25,6 +25,7 @@ type SearchBehaviorEvent struct {
 	Props           []byte      `json:"props"`
 }
 
+// RETIRED (0017): no longer read or written. See search.co_watch -- same story for the co-search half of the blend.
 type SearchCoSearch struct {
 	VideoA    uuid.UUID `json:"video_a"`
 	VideoB    uuid.UUID `json:"video_b"`
@@ -32,6 +33,7 @@ type SearchCoSearch struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// RETIRED (0017): no longer read or written. Co-visitation counts are recomputed from the retained search.behavior_events ledger each covis_rollup pass, because these cumulative counters were never pruned and outlived the events they came from. Kept only so the previous release can still run against this schema; dropped in the next release.
 type SearchCoWatch struct {
 	VideoA    uuid.UUID `json:"video_a"`
 	VideoB    uuid.UUID `json:"video_b"`

@@ -11,111 +11,42 @@ import (
 	"github.com/google/uuid"
 )
 
-const accumulateCoSearch = `-- name: AccumulateCoSearch :exec
-WITH clk AS (
-    SELECT id, session_id, normalized_query, video_id, occurred_at
-    FROM search.behavior_events
-    WHERE type = 'search.result_clicked'
-      AND session_id IS NOT NULL
-      AND video_id IS NOT NULL
-      AND normalized_query IS NOT NULL
-),
-new_clk AS (
-    SELECT id, session_id, normalized_query, video_id, occurred_at FROM clk
-    WHERE id > $1 AND id <= $2
-),
-pairs AS (
-    SELECT LEAST(n.video_id, p.video_id)  AS video_a,
-           GREATEST(n.video_id, p.video_id) AS video_b,
-           count(*)                        AS c
-    FROM new_clk n
-    JOIN clk p
-      ON p.session_id = n.session_id
-     AND p.normalized_query = n.normalized_query
-     AND p.id < n.id
-     AND p.video_id <> n.video_id
-     AND abs(EXTRACT(EPOCH FROM (n.occurred_at - p.occurred_at))) <= $3::double precision
-    GROUP BY 1, 2
-)
-INSERT INTO search.co_search (video_a, video_b, count, updated_at)
-SELECT video_a, video_b, c, now() FROM pairs
-ON CONFLICT (video_a, video_b) DO UPDATE
-    SET count = search.co_search.count + EXCLUDED.count, updated_at = now()
-`
-
-type AccumulateCoSearchParams struct {
-	Cursor        int64   `json:"cursor"`
-	Maxid         int64   `json:"maxid"`
-	WindowSeconds float64 `json:"window_seconds"`
-}
-
-func (q *Queries) AccumulateCoSearch(ctx context.Context, arg AccumulateCoSearchParams) error {
-	_, err := q.db.Exec(ctx, accumulateCoSearch, arg.Cursor, arg.Maxid, arg.WindowSeconds)
-	return err
-}
-
-const accumulateCoWatch = `-- name: AccumulateCoWatch :exec
-
-WITH watch AS (
-    SELECT id, session_id, video_id, occurred_at
-    FROM search.behavior_events
-    WHERE type IN ('video.play_started', 'video.meaningful_watch')
-      AND session_id IS NOT NULL
-      AND video_id IS NOT NULL
-),
-new_watch AS (
-    SELECT id, session_id, video_id, occurred_at FROM watch
-    WHERE id > $1 AND id <= $2
-),
-pairs AS (
-    SELECT LEAST(n.video_id, p.video_id)  AS video_a,
-           GREATEST(n.video_id, p.video_id) AS video_b,
-           count(*)                        AS c
-    FROM new_watch n
-    JOIN watch p
-      ON p.session_id = n.session_id
-     AND p.id < n.id
-     AND p.video_id <> n.video_id
-     AND abs(EXTRACT(EPOCH FROM (n.occurred_at - p.occurred_at))) <= $3::double precision
-    GROUP BY 1, 2
-)
-INSERT INTO search.co_watch (video_a, video_b, count, updated_at)
-SELECT video_a, video_b, c, now() FROM pairs
-ON CONFLICT (video_a, video_b) DO UPDATE
-    SET count = search.co_watch.count + EXCLUDED.count, updated_at = now()
-`
-
-type AccumulateCoWatchParams struct {
-	Cursor        int64   `json:"cursor"`
-	Maxid         int64   `json:"maxid"`
-	WindowSeconds float64 `json:"window_seconds"`
-}
-
-// Co-visitation worker (§1.9 covis_rollup) and the served neighbor reads.
-//
-// AccumulateCoWatch / AccumulateCoSearch are cursor-based, like the other rollup
-// workers: each pass folds behavior_events with id in (cursor, maxid] into the
-// cumulative co-occurrence counters. The pairing counts each unordered pair
-// exactly once: a NEW event is paired only with EARLIER events (p.id < n.id) in
-// the same session (co_watch) or same session+query (co_search) inside the time
-// window. Because every event lands in exactly one cursor range, and the earlier
-// partner is always already durable, the unordered pair {earlier, later} is
-// counted once — when the later event is the anchor — so re-running a rolled-back
-// batch never double counts.
-func (q *Queries) AccumulateCoWatch(ctx context.Context, arg AccumulateCoWatchParams) error {
-	_, err := q.db.Exec(ctx, accumulateCoWatch, arg.Cursor, arg.Maxid, arg.WindowSeconds)
-	return err
-}
-
 const clearCovisNeighbors = `-- name: ClearCovisNeighbors :exec
+
 DELETE FROM search.item_neighbors WHERE model_version = 'covis-v1'
 `
 
+// Co-visitation worker (§1.9 covis_rollup) and the served neighbor reads.
+//
+// The rollup is a FROM-SCRATCH rebuild of the covis-v1 index out of the CURRENTLY
+// RETAINED behavior_events ledger, and nothing else: ClearCovisNeighbors drops the
+// index, then RebuildCovisNeighbors re-pairs the ledger once per source and takes
+// the pair counts, the normalization mass AND the k-anonymity floor's subject
+// counts out of that one pairing. No cursor, no accumulator, one source of truth.
+//
+// The pairing counts each unordered pair-instance exactly once: an event is paired
+// only with EARLIER events (p.id < n.id) in the same session (co-watch) or same
+// session+query (co-search) inside the time window, so the unordered pair
+// {earlier, later} is counted once, when the later event is the anchor.
+//
+// WHY THIS IS NOT ACCUMULATED. Until this change the counts lived in cumulative
+// search.co_watch / search.co_search tables, folded forward by a cursor over
+// behavior_events. Nothing ever pruned them, so a co-visit kept contributing its
+// co-occurrence to the scores of every surviving pair long after retention deleted
+// both of its events, and a user's purge could not reach it either: the published
+// score was a number no surviving evidence could reproduce. vidra-search#34 had
+// already been forced to recompute the FLOOR from the ledger for exactly that
+// reason — computing the counts in the same CTE is the same pass over the same
+// rows, so respecting retention costs nothing extra here and removes the second
+// store rather than leaving two that can disagree. The counters are RETIRED
+// (migration 0017 marks them on the tables themselves) and are dropped one
+// release later, once no supported release still writes them.
 // Step 1 of the neighbor rebuild: drop the covis-v1 index so it can be recomputed
-// from the current co_* counters AND the currently retained event ledger (both
-// run in the covis worker's transaction). Dropping first is what lets an edge
-// LEAVE the index — when retention takes its support below the k-anonymity floor,
-// or when the operator raises that floor — rather than only ever being added to.
+// from the currently retained event ledger (both run in the covis worker's
+// transaction). Dropping first is what lets an edge LEAVE the index — when
+// retention or a purge takes its support below the k-anonymity floor, or takes
+// its co-occurrence down, or when the operator raises that floor — rather than
+// only ever being added to.
 func (q *Queries) ClearCovisNeighbors(ctx context.Context) error {
 	_, err := q.db.Exec(ctx, clearCovisNeighbors)
 	return err
@@ -295,16 +226,19 @@ WITH watch_ev AS (
       AND session_id IS NOT NULL
       AND video_id IS NOT NULL
 ),
-watch_support AS (
-    -- Distinct subjects behind each co-watched pair. The count is autosuggest's,
-    -- byte-for-byte with only the alias changed (see rollups.sql): distinct
-    -- account ids, plus distinct anonymous subjects for rows with no account,
-    -- preferring core's server-derived subject_id and falling back to session_id
-    -- only when the row carries no subject. Identity is taken from the ANCHOR
-    -- event n — a pair-instance is one session's visit, and taking it from one
-    -- fixed end keeps a session whose two events disagree from counting twice.
+watch_pairs AS (
+    -- One row per co-watched pair: how many co-visits the retained ledger holds
+    -- (c) and how many distinct people are behind them (subjects). The subject
+    -- count is autosuggest's, byte-for-byte with only the alias changed (see
+    -- rollups.sql): distinct account ids, plus distinct anonymous subjects for
+    -- rows with no account, preferring core's server-derived subject_id and
+    -- falling back to session_id only when the row carries no subject. Identity is
+    -- taken from the ANCHOR event n — a pair-instance is one session's visit, and
+    -- taking it from one fixed end keeps a session whose two events disagree from
+    -- counting twice.
     SELECT LEAST(n.video_id, p.video_id)   AS video_a,
            GREATEST(n.video_id, p.video_id) AS video_b,
+           count(*)::double precision       AS c,
            (count(DISTINCT n.user_id)
               + count(DISTINCT CASE WHEN n.user_id IS NULL THEN COALESCE(n.subject_id, n.session_id) END))::int AS subjects
     FROM watch_ev n
@@ -323,9 +257,10 @@ search_ev AS (
       AND video_id IS NOT NULL
       AND normalized_query IS NOT NULL
 ),
-search_support AS (
+search_pairs AS (
     SELECT LEAST(n.video_id, p.video_id)   AS video_a,
            GREATEST(n.video_id, p.video_id) AS video_b,
+           count(*)::double precision       AS c,
            (count(DISTINCT n.user_id)
               + count(DISTINCT CASE WHEN n.user_id IS NULL THEN COALESCE(n.subject_id, n.session_id) END))::int AS subjects
     FROM search_ev n
@@ -338,16 +273,13 @@ search_support AS (
     GROUP BY 1, 2
 ),
 cw_mass AS (
-    SELECT video_a AS i, video_b AS j, count::double precision AS c FROM search.co_watch
+    SELECT video_a AS i, video_b AS j, c FROM watch_pairs
     UNION ALL
-    SELECT video_b AS i, video_a AS j, count::double precision AS c FROM search.co_watch
+    SELECT video_b AS i, video_a AS j, c FROM watch_pairs
 ),
 cw_tot AS (SELECT i, sum(c) AS t FROM cw_mass GROUP BY i),
 cw_pair AS (
-    SELECT w.video_a, w.video_b, w.count::double precision AS c
-    FROM search.co_watch w
-    JOIN watch_support s ON s.video_a = w.video_a AND s.video_b = w.video_b
-    WHERE s.subjects >= $3::int
+    SELECT video_a, video_b, c FROM watch_pairs WHERE subjects >= $3::int
 ),
 cw AS (
     SELECT video_a AS i, video_b AS j, c FROM cw_pair
@@ -355,16 +287,13 @@ cw AS (
     SELECT video_b AS i, video_a AS j, c FROM cw_pair
 ),
 cs_mass AS (
-    SELECT video_a AS i, video_b AS j, count::double precision AS c FROM search.co_search
+    SELECT video_a AS i, video_b AS j, c FROM search_pairs
     UNION ALL
-    SELECT video_b AS i, video_a AS j, count::double precision AS c FROM search.co_search
+    SELECT video_b AS i, video_a AS j, c FROM search_pairs
 ),
 cs_tot AS (SELECT i, sum(c) AS t FROM cs_mass GROUP BY i),
 cs_pair AS (
-    SELECT k.video_a, k.video_b, k.count::double precision AS c
-    FROM search.co_search k
-    JOIN search_support s ON s.video_a = k.video_a AND s.video_b = k.video_b
-    WHERE s.subjects >= $3::int
+    SELECT video_a, video_b, c FROM search_pairs WHERE subjects >= $3::int
 ),
 cs AS (
     SELECT video_a AS i, video_b AS j, c FROM cs_pair
@@ -413,8 +342,16 @@ type RebuildCovisNeighborsParams struct {
 //
 // where total(i) is i's summed co-occurrence mass in that matrix. The shrinkage
 // factor cooc/(cooc+lambda) damps low-support pairs toward zero (algorithms
-// report λ≈10). co_watch and co_search are blended 0.7 / 0.3, and the top-M
-// neighbors per item (by score, id tie-break) are kept as source='blend'.
+// report λ≈10). The co-watch and co-search matrices are blended 0.7 / 0.3, and the
+// top-M neighbors per item (by score, id tie-break) are kept as source='blend'.
+//
+// EVERY INPUT COMES FROM THE RETAINED LEDGER. cooc(i,j) and total(i) are counted
+// off the same watch_pairs / search_pairs CTEs that count the floor's subjects, so
+// the published score is exactly what recomputing from the events this instance
+// still holds would give. An event that retention deletes, or that a user's purge
+// removes, stops contributing on the next pass — to the score, not only to the
+// floor. That is the whole reason the counts are not accumulated; see the file
+// header for what the cumulative counters used to get wrong.
 //
 // THE K-ANONYMITY FLOOR. A pair is published only once at least @min_subjects
 // DISTINCT SUBJECTS co-visited it. Shrinkage alone is a ranking device, not a
@@ -429,19 +366,18 @@ type RebuildCovisNeighborsParams struct {
 //
 // Three deliberate choices, because each has a cheaper-looking alternative:
 //
-//  1. Support is recomputed FROM THE EVENT LEDGER, not read off co_watch /
-//     co_search. Those counters hold visits, not people: six co-visits by one
-//     subject is count=6. They are also cumulative and never pruned, so support
-//     read out of them would outlive the evidence retention deleted. Reading
-//     behavior_events makes the floor a live question every pass — which is what
-//     keeps this a from-scratch rebuild (ClearCovisNeighbors runs first), so an
-//     edge whose support ages out disappears on the next rollup.
+//  1. Counts and support come from ONE pairing of the ledger, not two passes and
+//     not a stored counter. A pair-instance is a row of watch_pairs; how many
+//     there are is the co-occurrence, how many distinct subjects anchored them is
+//     the support. Counting them apart is how the two drifted before: the floor
+//     counted people who still exist while the score counted visits that no
+//     longer do.
 //
 //  2. The floor gates PUBLICATION, not counting. cw_mass / cs_mass — the
-//     normalization totals — are still the full counters, so a pair at the floor
-//     keeps EXACTLY the score it had before this gate existed. Filtering the
-//     totals too would silently re-scale every surviving neighbour, which is a
-//     relevance change wearing a privacy change's clothes.
+//     normalization totals — are the full retained mass including below-floor
+//     pairs, so a pair at the floor keeps EXACTLY the score it would have without
+//     the gate. Filtering the totals too would silently re-scale every surviving
+//     neighbour, which is a relevance change wearing a privacy change's clothes.
 //
 //  3. Each SOURCE is floored independently and its term zeroed, rather than the
 //     blended edge being dropped at the end. A below-floor co-search must not
@@ -449,10 +385,12 @@ type RebuildCovisNeighborsParams struct {
 //     earned. A pair below the floor on both sources scores exactly 0 and is
 //     dropped by the `score > 0` that was already there.
 //
-// Cost: the two support CTEs re-pair the retained watch/click ledger every pass
-// (default every 15 min), where the accumulators above only pair the new cursor
-// slice against it. The work is bounded by session size, not table size — pairs
-// only form within one session_id — but it is the expensive half of this job now.
+// Cost: two self-joins of the retained watch/click ledger per pass (default every
+// 15 min). The work is bounded by session size × retained sessions, NOT by
+// lifetime event volume — pairs only form within one session_id, and the ledger is
+// capped by EVENT_RETENTION_DAYS — so it does not grow with the age of the
+// instance. It is the whole cost of the job now that the cursor pass is gone;
+// docs/operations.md names the symptom and the two knobs.
 func (q *Queries) RebuildCovisNeighbors(ctx context.Context, arg RebuildCovisNeighborsParams) error {
 	_, err := q.db.Exec(ctx, rebuildCovisNeighbors,
 		arg.TopM,

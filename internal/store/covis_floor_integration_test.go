@@ -60,14 +60,6 @@ func neighborEdge(t *testing.T, env *testEnv, a, b uuid.UUID) (float64, bool) {
 	return score, n > 0
 }
 
-// coOccurrences reads the cumulative counter for an unordered pair, whichever way
-// round it was normalized.
-func coOccurrences(t *testing.T, env *testEnv, table string, a, b uuid.UUID) int64 {
-	t.Helper()
-	return countRows(t, env, `SELECT COALESCE(max(count), 0) FROM search.`+table+
-		` WHERE (video_a = $1 AND video_b = $2) OR (video_a = $2 AND video_b = $1)`, a, b)
-}
-
 // TestIntegrationCovisFloorPublishesAtTheFloorAndDropsBelowIt is the ruling in
 // one fixture: the A13 pair that three distinct people co-watched keeps its
 // EXACT score, and the three edges one person's single session produced are gone.
@@ -99,10 +91,11 @@ func TestIntegrationCovisFloorPublishesAtTheFloorAndDropsBelowIt(t *testing.T) {
 
 	runWorker(t, env, "covis_rollup")
 
-	// The floor is a PUBLICATION gate, not a counting one: the cumulative
-	// counters still saw every pair, including Dave's three.
-	if n := countRows(t, env, `SELECT count(*) FROM search.co_watch`); n != 4 {
-		t.Fatalf("co_watch pairs = %d, want 4 (A1-A2 plus Dave's three)", n)
+	// The floor is a PUBLICATION gate, not a counting one: the pairing still sees
+	// every pair, including Dave's three. (Read off the retained ledger since the
+	// cumulative counters were retired — see covis_retention_integration_test.go.)
+	if n := covisWatchPairs(t, env); n != 4 {
+		t.Fatalf("co-watched pairs in the ledger = %d, want 4 (A1-A2 plus Dave's three)", n)
 	}
 
 	score, ok := neighborEdge(t, env, a1, a2)
@@ -157,8 +150,8 @@ func TestIntegrationCovisFloorCountsOneAnonymousSubjectOnce(t *testing.T) {
 
 	runWorker(t, env, "covis_rollup")
 
-	if n := coOccurrences(t, env, "co_watch", b1, b2); n != 6 {
-		t.Fatalf("co_watch(B1,B2) = %d, want 6 — the counter counts visits, only the floor counts people", n)
+	if n := ledgerCoVisits(t, env, "watch", b1, b2); n != 6 {
+		t.Fatalf("co-visits(B1,B2) = %d, want 6 — the pairing counts visits, only the floor counts people", n)
 	}
 	if _, ok := neighborEdge(t, env, b1, b2); ok {
 		t.Errorf("six co-visits by ONE subject across six sessions must count as one and stay below the floor")
@@ -229,8 +222,8 @@ func TestIntegrationCovisFloorCountsSubjectsOnDerivedMeaningfulWatches(t *testin
 	}
 	runWorker(t, env, "covis_rollup")
 
-	if n := coOccurrences(t, env, "co_watch", d1, d2); n != 6 {
-		t.Fatalf("co_watch(D1,D2) = %d, want 6 — the pairs must come from the derived rows", n)
+	if n := ledgerCoVisits(t, env, "watch", d1, d2); n != 6 {
+		t.Fatalf("co-visits(D1,D2) = %d, want 6 — the pairs must come from the derived rows", n)
 	}
 	if _, ok := neighborEdge(t, env, d1, d2); ok {
 		t.Errorf("a derived meaningful_watch must carry the subject it was derived from: " +
@@ -281,8 +274,8 @@ func TestIntegrationCovisFloorAppliesToCoSearchAndTheBlend(t *testing.T) {
 
 	runWorker(t, env, "covis_rollup")
 
-	if n := coOccurrences(t, env, "co_search", s1, s2); n != 1 {
-		t.Fatalf("co_search(S1,S2) = %d, want 1", n)
+	if n := ledgerCoVisits(t, env, "search", s1, s2); n != 1 {
+		t.Fatalf("co-searches(S1,S2) = %d, want 1", n)
 	}
 	if _, ok := neighborEdge(t, env, s1, s2); ok {
 		t.Errorf("an edge whose ONLY support is one subject's co-search must not appear via the blend")
@@ -309,10 +302,9 @@ func TestIntegrationCovisFloorAppliesToCoSearchAndTheBlend(t *testing.T) {
 }
 
 // TestIntegrationCovisFloorDropsEdgeWhenRetentionPrunesItsSupport pins that the
-// rebuild stays a FROM-SCRATCH rebuild once the floor is part of it. The
-// cumulative co_watch counter is never pruned, so support has to be re-read from
-// the retained event ledger every pass — otherwise an edge that three people
-// earned in 2026 stays published forever on evidence the instance deleted.
+// rebuild stays a FROM-SCRATCH rebuild once the floor is part of it: support is
+// re-read from the retained event ledger every pass, so an edge that three people
+// earned in 2026 does not stay published on evidence the instance deleted.
 func TestIntegrationCovisFloorDropsEdgeWhenRetentionPrunesItsSupport(t *testing.T) {
 	env := newTestEnv(t)
 	now := time.Now()
@@ -338,10 +330,12 @@ func TestIntegrationCovisFloorDropsEdgeWhenRetentionPrunesItsSupport(t *testing.
 	if n := countRows(t, env, `SELECT count(*) FROM search.behavior_events`); n != 2 {
 		t.Fatalf("behavior_events after retention = %d, want 2 (only the fresh subject's pair survives)", n)
 	}
-	// The counter is untouched — which is exactly why the floor cannot be read
-	// out of it.
-	if n := coOccurrences(t, env, "co_watch", r1, r2); n != 3 {
-		t.Fatalf("co_watch(R1,R2) after retention = %d, want 3 (cumulative counters are not pruned)", n)
+	// The ledger is the only record of the pair, so retention took two thirds of it
+	// with the events. (Before the counters were retired this read 3 for as long as
+	// the instance lived, which is what made the score outlive its evidence — see
+	// TestIntegrationCovisRetentionRetractsSupportFromScores.)
+	if n := ledgerCoVisits(t, env, "watch", r1, r2); n != 1 {
+		t.Fatalf("co-visits(R1,R2) after retention = %d, want 1 (only the fresh subject survives)", n)
 	}
 
 	runWorker(t, env, "covis_rollup")
