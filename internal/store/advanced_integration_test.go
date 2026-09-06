@@ -61,8 +61,13 @@ func TestIntegrationCovisRollupToAdvancedRelated(t *testing.T) {
 	vd := video("delta popular filler", func(v *event.VideoDoc) { v.Views = 100000 })
 	ingest(t, env, upsertEnvelope(t, va), upsertEnvelope(t, vb), upsertEnvelope(t, vc), upsertEnvelope(t, vd))
 
-	// Two sessions co-watch (va, vb, vc) so the pairs clear a little support.
-	for _, sess := range []string{"cw-s1", "cw-s2"} {
+	// Three distinct users co-watch (va, vb, vc) in one session each. Three is not
+	// arbitrary and is not "a little support": it is the instance's k-anonymity
+	// floor (workerCfg.MinQueryUserCount), which the neighbour rebuild now applies
+	// to every pair. Two sessions used to be enough here because the rebuild
+	// filtered on `score > 0` and nothing else — see
+	// covis_floor_integration_test.go for the floor itself.
+	for _, sess := range []string{"cw-s1", "cw-s2", "cw-s3"} {
 		u := uuid.New()
 		ingest(t, env,
 			play(now, va.ID, "", &u, sess, false),

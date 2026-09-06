@@ -130,8 +130,17 @@ SELECT
         AND be.occurred_at <= wp.occurred_at
       ORDER BY be.occurred_at DESC LIMIT 1),
     wp.video_id, wp.occurred_at,
+    -- subject_id is carried over from the watch_progress row it is derived from.
+    -- It is not decoration: video.meaningful_watch is one of the two event types
+    -- the co-visitation floor counts, and a derived row with no subject falls back
+    -- to the client-controlled session_id — so dropping it here handed an
+    -- anonymous client rotating X-Vidra-Session a way to manufacture N distinct
+    -- "people" behind a pair whose play_started half correctly counted one.
+    -- Rows derived before this change keep subject_id NULL and keep counting
+    -- through the session fallback, the same as pre-0016 query_log rows.
     jsonb_build_object('allow_history', COALESCE((wp.props->>'allow_history')::boolean, false),
-                       'derived_from', 'watch_progress')
+                       'derived_from', 'watch_progress',
+                       'subject_id', wp.props->>'subject_id')
 FROM search.behavior_events wp
 WHERE wp.type = 'video.watch_progress'
   AND wp.id > @cursor AND wp.id <= @maxid

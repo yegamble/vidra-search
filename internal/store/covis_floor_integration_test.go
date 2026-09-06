@@ -168,6 +168,70 @@ func TestIntegrationCovisFloorCountsOneAnonymousSubjectOnce(t *testing.T) {
 	}
 }
 
+// anonWatch is an ANONYMOUS video.watch_progress envelope — the event the
+// engagement rollup derives video.meaningful_watch from.
+func anonWatch(occurredAt time.Time, videoID uuid.UUID, positionSeconds float64, session, subject string) event.Envelope {
+	p := map[string]any{"video_id": videoID.String(), "position_seconds": positionSeconds, "allow_history": false}
+	if session != "" {
+		p["session_id"] = session
+	}
+	if subject != "" {
+		p["subject_id"] = subject
+	}
+	return behEnv(event.TypeVideoWatchProgress, occurredAt, p)
+}
+
+// TestIntegrationCovisFloorCountsSubjectsOnDerivedMeaningfulWatches closes the
+// half of the floor that the play_started path alone would leave open.
+// video.meaningful_watch is one of the two event types co_watch pairs, and it is
+// SYNTHESISED here rather than sent by core — so its props are whatever
+// DeriveMeaningfulWatch builds. While that object dropped subject_id, a derived
+// row fell back to the client-controlled session_id, and one anonymous machine
+// rotating X-Vidra-Session manufactured N "people" behind a pair on a path where
+// the play_started half correctly counted one.
+func TestIntegrationCovisFloorCountsSubjectsOnDerivedMeaningfulWatches(t *testing.T) {
+	env := newTestEnv(t)
+	now := time.Now()
+
+	// One subject, six sessions, watch_progress ONLY — so every co_watch pair
+	// here comes from a derived meaningful_watch, not from a play_started.
+	d1, d2 := uuid.New(), uuid.New()
+	for i := 0; i < 6; i++ {
+		at := now.Add(time.Duration(i) * time.Minute)
+		sess := fmt.Sprintf("kf-mw-rot-%d", i)
+		ingest(t, env,
+			anonWatch(at, d1, 60, sess, "subject-fake-mw-rotator"),
+			anonWatch(at.Add(time.Second), d2, 60, sess, "subject-fake-mw-rotator"))
+	}
+	// Control: three distinct subjects, same shape.
+	e1, e2 := uuid.New(), uuid.New()
+	for i := 0; i < 3; i++ {
+		at := now.Add(time.Duration(i) * time.Minute)
+		sess := fmt.Sprintf("kf-mw-sub-%d", i)
+		subj := fmt.Sprintf("subject-fake-mw-%d", i)
+		ingest(t, env,
+			anonWatch(at, e1, 60, sess, subj),
+			anonWatch(at.Add(time.Second), e2, 60, sess, subj))
+	}
+
+	runWorker(t, env, "engagement_rollup") // derives the meaningful_watch rows
+	if n := countRows(t, env, `SELECT count(*) FROM search.behavior_events WHERE type = 'video.meaningful_watch'`); n != 18 {
+		t.Fatalf("derived meaningful_watch rows = %d, want 18", n)
+	}
+	runWorker(t, env, "covis_rollup")
+
+	if n := coOccurrences(t, env, "co_watch", d1, d2); n != 6 {
+		t.Fatalf("co_watch(D1,D2) = %d, want 6 — the pairs must come from the derived rows", n)
+	}
+	if _, ok := neighborEdge(t, env, d1, d2); ok {
+		t.Errorf("a derived meaningful_watch must carry the subject it was derived from: " +
+			"six sessions of ONE subject must count as one and stay below the floor")
+	}
+	if _, ok := neighborEdge(t, env, e1, e2); !ok {
+		t.Errorf("three distinct subjects watching meaningfully must clear the floor")
+	}
+}
+
 // TestIntegrationCovisFloorAppliesToCoSearchAndTheBlend pins that BOTH blended
 // sources are floored, and floored independently: a below-floor co-search
 // contributes nothing, so it can neither publish an edge on its own nor inflate
