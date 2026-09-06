@@ -140,7 +140,7 @@ func (s *Server) handleGetSearchHistory(c echo.Context) error {
 }
 
 // handleClearSearchHistory serves DELETE /internal/v1/users/{user_id}/search-history:
-// clears the user's history and anonymizes their raw logs.
+// deletes the user's history and their rows in the raw ledgers.
 func (s *Server) handleClearSearchHistory(c echo.Context) error {
 	userID, err := pathUUID(c, "user_id")
 	if err != nil {
@@ -169,7 +169,7 @@ func (s *Server) handleDeleteSearchHistoryEntry(c echo.Context) error {
 }
 
 // handleDeleteUser serves DELETE /internal/v1/users/{user_id}: a full privacy
-// purge (history, projections, anonymized logs).
+// purge (history, projections, and every ledger row naming the user).
 func (s *Server) handleDeleteUser(c echo.Context) error {
 	userID, err := pathUUID(c, "user_id")
 	if err != nil {

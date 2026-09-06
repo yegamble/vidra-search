@@ -295,6 +295,25 @@ func TestIntegrationClearAllDeletesEveryRowThatNamesTheAccount(t *testing.T) {
 		t.Errorf("a redelivery resurrected %d cleared rows", n)
 	}
 
+	// (f) The Redis state that is NOT removed, and why that is still a bounded
+	// answer rather than a leak with no end. The per-subject trending guard keys
+	// the account id INTO the key name, but it is a rate-limit token, and finding
+	// them means a MATCH sweep of the whole keyspace on every clear; the
+	// distinct-subject HyperLogLog holds the account id as a sketched element,
+	// which cannot be removed from an HLL at all. Both expire — the guard with
+	// SEARCH_TREND_CAP_WINDOW, the HLL with the 8-day per-day counter TTL — and
+	// this pins that "expires" is a fact about the keys and not a hope.
+	for _, k := range boundedAccountKeys(t, env, clearer, v) {
+		ttl, err := env.cache.Client.TTL(ctx, k).Result()
+		if err != nil {
+			t.Fatalf("TTL %s: %v", k, err)
+		}
+		if ttl <= 0 {
+			t.Errorf("%s has TTL %v — account-keyed Redis state that clear-all does not delete "+
+				"must at least expire on a stated bound", k, ttl)
+		}
+	}
+
 	// (e) The watch projection is NOT search scope. Clearing search history must
 	// not silently delete watch personalization; that is the `all` scope, and core
 	// decides which one the user asked for.
@@ -416,4 +435,22 @@ func TestIntegrationClearAllLeavesTheAnonymousPathAlone(t *testing.T) {
 		`SELECT count(*) FROM search.behavior_events WHERE session_id = 'hc-anon-legacy'`); n != 2 {
 		t.Errorf("the legacy (no subject) rows = %d, want 2 untouched", n)
 	}
+}
+
+// boundedAccountKeys returns the Redis keys that carry the account id but are not
+// deleted by a clear: the per-(subject,item) trending ranking guard, and the
+// per-day distinct-subject HyperLogLog the account was PFADDed into.
+func boundedAccountKeys(t *testing.T, env *testEnv, user, video uuid.UUID) []string {
+	t.Helper()
+	day := time.Now().UTC().Format("20060102")
+	keys := []string{
+		"guard:trend:v:" + user.String() + ":" + video.String(),
+		"hll:v:" + video.String() + ":" + day,
+	}
+	for _, k := range keys {
+		if !redisKeyExists(t, env, k) {
+			t.Fatalf("fixture: expected %s to exist so its bound can be asserted", k)
+		}
+	}
+	return keys
 }
