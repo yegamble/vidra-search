@@ -87,16 +87,17 @@ actor can still reach a floor of 3 by searching on 3 different UTC days; the
 attack is not closed, its cost moves from three requests to three days. And
 because the subject is address-derived, a NAT/CGNAT/campus egress collapses many
 real people into one subject — which UNDER-counts and yields FEWER suggestions,
-FEWER trending items and FEWER neighbour edges, never more. On trending that under-count is felt harder than
-on suggestions, because trending is a ranking surface with a hard distinct-user
-gate: a query genuinely popular behind one shared egress now fails the gate
-outright rather than ranking lower. That trade is taken knowingly — the identity
-that used to credit those people 25× is the same identity that credited an
-attacker 40×, and on the wire the two are indistinguishable. `docs/operations.md`
-names the symptom, the metric and the topology where it goes wrong. Rows carrying
-no subject (written before migration 0016, or anonymous requests whose address
-could not be derived) fall back to `session_id`; see `docs/operations.md` for the
-measurement that says when that fallback can be dropped.
+FEWER trending items and FEWER neighbour edges, never more. On trending and on
+co-visitation that under-count is felt harder than on suggestions, because both
+are ranking surfaces with a hard distinct-user gate: a query genuinely popular
+behind one shared egress now fails the gate outright rather than ranking lower.
+That trade is taken knowingly — the identity that used to credit those people 25×
+is the same identity that credited an attacker 40×, and on the wire the two are
+indistinguishable. `docs/operations.md` names the symptom, the metric and the
+topology where it goes wrong. Rows carrying no subject (written before migration
+0016, or anonymous requests whose address could not be derived) fall back to
+`session_id`; see `docs/operations.md` for the measurement that says when that
+fallback can be dropped.
 
 The threshold is **continuously re-checked, not latched**. The rollup only
 recomputes `suggestible` for queries carrying new traffic, and nothing prunes
