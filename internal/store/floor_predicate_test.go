@@ -46,3 +46,41 @@ func TestFloorPredicateIsSharedByRollupAndReevaluation(t *testing.T) {
 		}
 	}
 }
+
+// decayedFreqSum is the recency-weighted popularity sum, byte-for-byte as it must
+// appear in BOTH query files. Update it here only together with both.
+const decayedFreqSum = "sum(power(2, - GREATEST(0, EXTRACT(EPOCH FROM (a.last_seen - ql.submitted_at)))\n" +
+	"                        / @half_life_seconds::double precision))::double precision AS decayed_freq"
+
+// TestDecayedFreqSumIsSharedByRollupAndReevaluation is the floor test's sibling
+// for the other number the two passes both write. decayed_freq is autosuggest's
+// SORT KEY: the 1-minute rollup recomputes it for queries with new traffic and
+// the nightly pass recomputes it for every row, so a divergence would not merely
+// disagree — it would reorder the aggregate suggestion stream on every cycle,
+// one way at :01 and the other way at midnight, with nothing in the logs saying
+// why. Both must anchor the decay on the same last_seen over the same retained
+// window at the same half-life.
+//
+// A behavioural test can only catch a divergence its fixture happens to straddle;
+// this catches every divergence, and it needs no database, so it runs in the fast
+// `make ci` lane.
+func TestDecayedFreqSumIsSharedByRollupAndReevaluation(t *testing.T) {
+	// Once each: the rollup's freq CTE, and the apply half of the re-evaluation.
+	// The dry run does not compute it — it previews which rows MOVE, and that
+	// decision is made on exact integers (see reevaluation.sql).
+	for _, path := range []string{
+		filepath.Join("queries", "rollups.sql"),
+		filepath.Join("queries", "reevaluation.sql"),
+	} {
+		src, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		if got := strings.Count(string(src), decayedFreqSum); got != 1 {
+			t.Errorf("%s contains the shared decayed_freq sum %d time(s), want 1.\n"+
+				"The rollup and the re-evaluation pass MUST compute autosuggest's sort key identically; "+
+				"change one and you must change the other in the same commit.\nExpected exactly:\n%s",
+				path, got, decayedFreqSum)
+		}
+	}
+}

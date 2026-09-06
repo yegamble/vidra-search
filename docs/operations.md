@@ -95,13 +95,44 @@ in `worker_cursors` in the SAME transaction as the writes they cover, so a crash
 resumes rather than reprocesses; derived rows use deterministic ids so retries
 are idempotent.
 
-- `aggregates_rollup` (1m) — folds new `query_log` into `query_aggregates`
-  (decay-then-increment `decayed_freq`, exact distinct-user recount, suggestible
-  flag). The recount counts distinct `user_id`s plus, for anonymous rows, distinct
-  `subject_id`s — see "The anonymous distinct-user floor" below.
+- `aggregates_rollup` (1m) — refreshes `query_aggregates` for the queries
+  carrying new `query_log` rows. The cursor picks WHICH queries; every value
+  written (`total_count`, `decayed_freq`, `distinct_users`, `first_seen`,
+  `last_seen`) is **recomputed from the rows still inside
+  `EVENT_RETENTION_DAYS`**, so an aggregate is what a reader recomputing from
+  surviving evidence would get. The distinct-user recount counts distinct
+  `user_id`s plus, for anonymous rows, distinct `subject_id`s — see "The
+  anonymous distinct-user floor" below.
+  - `decayed_freq` is anchored on the query's own `last_seen` (its newest
+    SURVIVING row), which is what the old decay-then-increment approximated.
+    Anchoring on `now()` instead would force every row to be rewritten on every
+    pass just to stay comparable.
+  - **Cost.** One extra grouped scan of rows the recount CTE already reads.
+    Measured on a throwaway `postgres:18-alpine` with 300k `query_log` rows over
+    5000 distinct queries: a steady-state pass (500 new rows) 94 ms → **146 ms**;
+    a worst-case pass folding the whole table as one batch (a first pass or a
+    backfill) 396 ms → **566 ms**. Both are well inside the 1-minute cadence and
+    the 2-minute job timeout.
 - `engagement_rollup` (5m) — derives `video.meaningful_watch` from qualifying
-  `video.watch_progress`, folds impressions/clicks/meaningful-watches into
-  `query_video_engagement`, and applies the meaningful-watch projection weight.
+  `video.watch_progress`, applies the meaningful-watch projection weight, and
+  **clears and rebuilds** `query_video_engagement` from the retained
+  `behavior_events`.
+  - The cursor governs DERIVATION only (a derived row must produce its projection
+    weight and trend bump exactly once). The counter rebuild has no cursor and
+    runs on every pass, **including passes with no new events** — that is the only
+    way a counter can FALL when retention or a user's deletion takes its evidence
+    away. Until this changed, the counters were a cumulative cursor fold nothing
+    pruned: the same shape the co-visitation counters had before `0017`, and
+    these are read live (advanced recall on `clicks > 0`, plus the stage-2 CTR
+    and meaningful-watch-rate features).
+  - **Cost.** ONE grouped scan of the retained impression/click/watch ledger,
+    served by `behavior_events_type_occurred_idx` — strictly less work than
+    `covis_rollup`, which self-joins the same ledger twice. Same throwaway
+    Postgres, 45k distinct (query, video) pairs: 200k events **~0.21 s**, 400k
+    events **~0.29 s** per pass, plus a ~9 ms `DELETE`. If it ever stops keeping
+    up, the knobs are the covis ones: raise `SEARCH_ENGAGEMENT_INTERVAL` or lower
+    `EVENT_RETENTION_DAYS`. The whole table is rewritten each pass; autovacuum
+    reclaims it, exactly as for the `item_neighbors` rebuild.
 - `sessionizer` (5m) — derives `search.reformulated` / `search.abandoned` over
   settled `query_log` rows.
 - `trending_sweeper` (1m) — decays + prunes the Redis trend ZSETs and republishes
@@ -110,10 +141,19 @@ are idempotent.
   projections.
 - `reconcile_guard` (10m) — warns + sets the reconcile-age gauge when no
   `reconcile.end` has arrived within `~48h`.
-- `suggestible_reeval` (24h) — recomputes `query_aggregates.suggestible` for
-  EVERY row against the surviving `query_log`, not just rows with new traffic.
+- `suggestible_reeval` (24h) — recomputes `query_aggregates.suggestible` AND the
+  popularity counters (`total_count`, `decayed_freq`, `first_seen`, `last_seen`)
+  for EVERY row against the surviving `query_log`, not just rows with new
+  traffic. The 1-minute rollup's batch join is INNER, so a query that goes QUIET
+  after a user clears their history is never in it — this pass is the only thing
+  that reaches it, and it is what makes "recomputed within a day" true.
   Batched at 10k, logs `changed` plus a sample; `SEARCH_REEVAL_DRY_RUN=true`
   makes it report-only. See "Re-evaluate suggestibility" below.
+  - **The first pass after this upgrade will report a large `changed`.** The two
+    counters were previously cumulative and could only grow, so on an instance
+    with history behind it most rows move at once. That is the correction
+    landing, not a fault — run the dry run first if you want its size before it
+    happens.
 
 W3 adds four more loops (wired as generic periodic jobs; also runnable one-shot
 via `SEARCH_RUN_JOB=<name>`):
@@ -386,6 +426,11 @@ SELECT version, status, activated_at FROM search.models WHERE kind='ranker' ORDE
   retention prunes the `query_log` rows that justified a suggestion while the
   suggestion itself survives. `suggestible_reeval` closes all three by re-running
   the rollup's own predicate over every row against the surviving `query_log`.
+  It now recomputes `total_count` / `decayed_freq` / `first_seen` / `last_seen`
+  in the same sweep, for the same reason: a quiet query is unreachable by the
+  rollup, so this is the only pass that can retract the volume a deleted or
+  aged-out search contributed to it. `decayed_freq` is autosuggest's sort key,
+  so this decides ORDER even where it does not decide membership.
 
   **Always dry-run first.** A remediation that silently empties autosuggest is a
   worse outcome than the bug it closes.

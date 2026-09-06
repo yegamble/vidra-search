@@ -18,11 +18,12 @@ const (
 )
 
 // ReevalChange is one aggregate row the pass moved, or — in a dry run — would
-// move. Suggestible is the value the row takes, not the value it had.
+// move. Every field is the value the row TAKES, not the value it had.
 type ReevalChange struct {
 	NormalizedQuery string `json:"normalized_query"`
 	Suggestible     bool   `json:"suggestible"`
 	DistinctUsers   int32  `json:"distinct_users"`
+	TotalCount      int64  `json:"total_count"`
 }
 
 // ReevalReport summarises one pass. Changed is exact in both modes: applying
@@ -34,10 +35,12 @@ type ReevalReport struct {
 	Sample  []ReevalChange `json:"sample"`
 }
 
-// ReevaluateSuggestible recomputes query_aggregates.suggestible for every row
-// against the currently-surviving query_log — see queries/reevaluation.sql for
-// why the rollup alone cannot. Exported so integration tests and the one-shot
-// SEARCH_RUN_JOB path can observe counts a ticker loop would only log.
+// ReevaluateSuggestible recomputes query_aggregates.suggestible AND the
+// popularity counters (total_count, decayed_freq, first_seen, last_seen) for
+// every row against the currently-surviving query_log — see
+// queries/reevaluation.sql for why the rollup alone cannot reach a query that
+// has gone quiet. Exported so integration tests and the one-shot SEARCH_RUN_JOB
+// path can observe counts a ticker loop would only log.
 //
 // dryRun reports what would move and changes nothing. It is the intended first
 // step on an instance that has been accumulating unsupported suggestions: an
@@ -48,6 +51,7 @@ func (r *Runner) ReevaluateSuggestible(ctx context.Context, dryRun bool) (Reeval
 	minUsers := int32(overlayInt(ov, "minimum_query_user_count", r.cfg.MinQueryUserCount))
 	retentionDays := overlayInt(ov, "search_event_retention_days", r.cfg.RetentionDays)
 	windowStart := time.Now().Add(-time.Duration(retentionDays) * 24 * time.Hour)
+	halfLife := r.cfg.QueryHalfLifeSeconds
 	q := r.store.Queries()
 	rep := ReevalReport{DryRun: dryRun}
 
@@ -78,7 +82,8 @@ func (r *Runner) ReevaluateSuggestible(ctx context.Context, dryRun bool) (Reeval
 				return
 			}
 			rep.Sample = append(rep.Sample, ReevalChange{
-				NormalizedQuery: row.NormalizedQuery, Suggestible: row.Suggestible, DistinctUsers: row.DistinctUsers,
+				NormalizedQuery: row.NormalizedQuery, Suggestible: row.Suggestible,
+				DistinctUsers: row.DistinctUsers, TotalCount: row.TotalCount,
 			})
 		}
 	}
@@ -115,7 +120,7 @@ func (r *Runner) ReevaluateSuggestible(ctx context.Context, dryRun bool) (Reeval
 	// work strictly shrinks and the loop terminates without needing a cursor.
 	for batch := 0; batch < reevalMaxBatches; batch++ {
 		n, err := q.ReevaluateSuggestible(ctx, sqlcgen.ReevaluateSuggestibleParams{
-			WindowStart: windowStart, MinUsers: minUsers, Lim: reevalBatchSize,
+			WindowStart: windowStart, MinUsers: minUsers, HalfLifeSeconds: halfLife, Lim: reevalBatchSize,
 		})
 		if err != nil {
 			return rep, err
@@ -126,7 +131,7 @@ func (r *Runner) ReevaluateSuggestible(ctx context.Context, dryRun bool) (Reeval
 		}
 	}
 	if rep.Changed > 0 {
-		r.logger.InfoContext(ctx, "suggestible_reeval: recomputed suggestibility from surviving query_log",
+		r.logger.InfoContext(ctx, "suggestible_reeval: recomputed suggestibility and popularity counters from surviving query_log",
 			"changed", rep.Changed, "min_users", minUsers, "retention_days", retentionDays, "sample", rep.Sample)
 	}
 	return rep, nil

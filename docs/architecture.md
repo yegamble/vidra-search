@@ -57,9 +57,12 @@ IDs — never rendered content.
   live in `internal/ranking` as pure, unit-tested functions.
 - **Behavioral pipeline (W2).** Behavioral events are persisted to
   `behavior_events` (plus `query_log`, and — under the `allow_history` rule —
-  personal history/projection tables), then folded by cursor-based background
-  workers into `query_aggregates` (global suggestions), `query_video_engagement`
-  (CTR/meaningful-watch features), and Redis trending ZSETs. Ephemeral session
+  personal history/projection tables), then read by background workers into
+  `query_aggregates` (global suggestions), `query_video_engagement`
+  (CTR/meaningful-watch features), and Redis trending ZSETs. The two Postgres
+  aggregates are RECOMPUTED from the retained ledger, not accumulated: a cursor
+  only picks which rows to derive or which queries to refresh, so an event that
+  retention or a user's deletion removes stops counting on the next pass. Ephemeral session
   context and trending increments are flushed to Redis after the DB commit. The
   aggregate-query suggestion stream is now a `query_aggregates`-backed reader.
 

@@ -22,11 +22,37 @@ SELECT COALESCE(max(id), 0)::bigint FROM search.behavior_events;
 SELECT COALESCE(max(id), 0)::bigint FROM search.query_log WHERE submitted_at <= @cutoff;
 
 -- name: RollupQueryAggregates :exec
--- Fold new query_log rows (id in (cursor, maxid]) into query_aggregates.
--- decayed_freq is decay-then-increment (half-life from config); distinct_users is
--- an EXACT recount over the retained window (distinct user_id + anonymous
--- subject); display_query is the most recent display form; suggestible clears the
--- min distinct-user threshold and is never true for a banned query.
+-- Refresh query_aggregates for the queries carrying new query_log rows (id in
+-- (cursor, maxid]). display_query is the most recent display form; suggestible
+-- clears the min distinct-user threshold and is never true for a banned query.
+--
+-- THE CURSOR SELECTS WHICH QUERIES TO REFRESH; IT DOES NOT ACCUMULATE ANY VALUE.
+-- Every number written here — total_count, decayed_freq, distinct_users,
+-- first_seen, last_seen — is recomputed from the query_log rows this instance
+-- STILL HOLDS inside the retention window, so the row is exactly what a reader
+-- recomputing from surviving evidence would get.
+--
+-- It used to be half that. distinct_users was recounted, but total_count was
+-- `previous + delta` and decayed_freq was decay-then-increment, both folded
+-- forward by the cursor and never pruned. So a search that retention deleted, or
+-- that a user's "Clear all" removed, kept counting for ever — and decayed_freq is
+-- the ORDER of the aggregate suggestion stream, so deleted searches kept buying a
+-- completion its rank. That is the shape vidra-search#36 removed from
+-- co-visitation (cumulative co_watch / co_search counters nothing pruned); the
+-- owner's ruling there — support counters carry the same retention the floor
+-- does — applies here verbatim. Recomputing costs nothing extra: the recount CTE
+-- was already scanning exactly these rows for the floor.
+--
+-- decayed_freq is anchored on the query's own last_seen (the newest SURVIVING
+-- row), which is what decay-then-increment approximated. Anchoring on now()
+-- instead would be a relevance change, not a retention one: every row would then
+-- have to be rewritten on every pass to stay comparable. Anchored this way the
+-- value is a pure function of the retained rows, so two passes over an unchanged
+-- ledger produce the same number.
+--
+-- first_seen / last_seen are recomputed the same way and no longer LEAST/GREATEST
+-- accumulations. They must be: last_seen is decayed_freq's anchor, so a last_seen
+-- that outlives its row would anchor the sum on evidence that is gone.
 --
 -- The anonymous half of that floor counts subject_id — core's server-derived,
 -- day-scoped, address-keyed pseudonym — because session_id is a client-supplied
@@ -39,10 +65,10 @@ SELECT COALESCE(max(id), 0)::bigint FROM search.query_log WHERE submitted_at <= 
 -- out at the retention horizon; see docs/operations.md for the measurement that
 -- says when the COALESCE can be dropped.
 WITH batch AS (
-    SELECT ql.normalized_query,
-           count(*)             AS delta,
-           min(ql.submitted_at) AS batch_first_seen,
-           max(ql.submitted_at) AS batch_last_seen
+    -- WHICH queries to refresh, and nothing else. The counts this CTE used to
+    -- contribute (`delta`) are gone: a batch count is a count of rows that
+    -- arrived, which is not a count of rows that survive.
+    SELECT ql.normalized_query
     FROM search.query_log ql
     WHERE ql.id > @from_id AND ql.id <= @maxid AND ql.normalized_query <> ''
     GROUP BY ql.normalized_query
@@ -62,11 +88,35 @@ recount AS (
     -- and TestFloorPredicateIsSharedByRollupAndReevaluation pin that.
     SELECT b.normalized_query,
            (count(DISTINCT ql.user_id)
-              + count(DISTINCT CASE WHEN ql.user_id IS NULL THEN COALESCE(ql.subject_id, ql.session_id) END))::int AS distinct_users
+              + count(DISTINCT CASE WHEN ql.user_id IS NULL THEN COALESCE(ql.subject_id, ql.session_id) END))::int AS distinct_users,
+           count(*)::bigint     AS total_count,
+           min(ql.submitted_at) AS first_seen,
+           max(ql.submitted_at) AS last_seen
     FROM batch b
     JOIN search.query_log ql ON ql.normalized_query = b.normalized_query
         AND ql.submitted_at >= @window_start
     GROUP BY b.normalized_query
+),
+freq AS (
+    -- The recency-weighted sum, anchored on the row's own last_seen so the value
+    -- is a function of the retained rows and of nothing else (not of now(), not
+    -- of what the previous pass happened to store). A second grouping over the
+    -- SAME rows recount just scanned, because an aggregate cannot reference
+    -- another aggregate of its own group.
+    --
+    -- THIS EXPRESSION IS SHARED with reevaluation.sql, exactly as the floor count
+    -- above is: the daily pass is this computation with the batch INNER JOIN
+    -- removed. Change it here, change it there, in the same commit — a divergence
+    -- makes decayed_freq (and therefore autosuggest's ORDER) flip between the two
+    -- passes on every cycle. TestDecayedFreqSumIsSharedByRollupAndReevaluation
+    -- pins it at the source level.
+    SELECT a.normalized_query,
+           sum(power(2, - GREATEST(0, EXTRACT(EPOCH FROM (a.last_seen - ql.submitted_at)))
+                        / @half_life_seconds::double precision))::double precision AS decayed_freq
+    FROM recount a
+    JOIN search.query_log ql ON ql.normalized_query = a.normalized_query
+        AND ql.submitted_at >= @window_start
+    GROUP BY a.normalized_query
 ),
 display AS (
     SELECT DISTINCT ON (ql.normalized_query) ql.normalized_query, ql.display_query
@@ -74,27 +124,26 @@ display AS (
     JOIN batch b ON b.normalized_query = ql.normalized_query
     ORDER BY ql.normalized_query, ql.submitted_at DESC, ql.id DESC
 )
--- The full new row (including the decayed_freq computed from the LEFT-JOINed
--- existing aggregate) is built in the SELECT, so the ON CONFLICT clause is a
--- trivial column-wise overwrite. The aggregates_rollup worker is a single writer
--- inside one transaction, so the read-compute-upsert is race-free.
+-- The full new row is built in the SELECT, so the ON CONFLICT clause is a trivial
+-- column-wise overwrite. The aggregates_rollup worker is a single writer inside
+-- one transaction, so the read-compute-upsert is race-free. The existing
+-- aggregate is still LEFT JOINed, but now for `banned` ALONE — the one column
+-- that is a moderator's decision rather than a fact about the ledger, and which
+-- this pass must therefore carry forward rather than recompute.
 INSERT INTO search.query_aggregates
     (normalized_query, display_query, total_count, distinct_users, decayed_freq, first_seen, last_seen, suggestible, banned)
 SELECT b.normalized_query,
        d.display_query,
-       COALESCE(qa.total_count, 0) + b.delta,
+       r.total_count,
        r.distinct_users,
-       COALESCE(qa.decayed_freq, 0)
-           * power(2, - (CASE WHEN qa.last_seen IS NULL THEN 0
-                              ELSE GREATEST(0, EXTRACT(EPOCH FROM (b.batch_last_seen - qa.last_seen))) END)
-                        / @half_life_seconds::double precision)
-           + b.delta::double precision,
-       LEAST(qa.first_seen, b.batch_first_seen),
-       GREATEST(qa.last_seen, b.batch_last_seen),
+       f.decayed_freq,
+       r.first_seen,
+       r.last_seen,
        (r.distinct_users >= @min_users::int) AND NOT COALESCE(qa.banned, false),
        COALESCE(qa.banned, false)
 FROM batch b
 JOIN recount r ON r.normalized_query = b.normalized_query
+JOIN freq f ON f.normalized_query = b.normalized_query
 JOIN display d ON d.normalized_query = b.normalized_query
 LEFT JOIN search.query_aggregates qa ON qa.normalized_query = b.normalized_query
 ON CONFLICT (normalized_query) DO UPDATE SET
@@ -167,10 +216,38 @@ WHERE wp.type = 'video.watch_progress'
 ON CONFLICT (event_id) DO NOTHING
 RETURNING event_id, user_id, session_id, video_id, normalized_query, props;
 
--- name: FoldEngagement :exec
--- Fold new behavior_events (id in (cursor, maxid]) into per-(query,video)
--- engagement counters. Meaningful-watch rows derived in the current pass have
--- id > maxid, so they are folded on the next pass — counted exactly once.
+-- name: ClearQueryVideoEngagement :exec
+-- Step 1 of the engagement rebuild, in the same idiom (and for the same reason)
+-- as ClearCovisNeighbors: dropping first is what lets a counter FALL. Both steps
+-- run in the engagement worker's transaction, so a crash leaves the previous
+-- table in place rather than an empty one.
+DELETE FROM search.query_video_engagement;
+
+-- name: RebuildQueryVideoEngagement :exec
+-- Step 2: recompute every per-(query, video) counter from the CURRENTLY RETAINED
+-- behavior_events. One grouped scan, no cursor, no accumulation.
+--
+-- It used to be a cursor fold — `existing + delta` over (cursor, maxid] — which
+-- nothing ever pruned. That is the exact shape vidra-search#36 removed from
+-- co-visitation, and the ruling behind it (a support counter carries the same
+-- retention its evidence does) applies here unchanged. This table is READ LIVE:
+-- SearchAdvancedRecall recalls candidates on `clicks > 0` for the query and feeds
+-- impressions/clicks/meaningful_watches into the stage-2 CTR and
+-- meaningful-watch-rate features. So a deleted click did not merely sit in a
+-- disused table — it kept recalling and ranking a video, and a user's "Clear all"
+-- could not reach it.
+--
+-- Cost: ONE grouped scan of the retained impression/click/watch ledger per pass
+-- (default every 5 min), served by behavior_events_type_occurred_idx. That is
+-- strictly less work than covis_rollup, which self-joins the same ledger TWICE
+-- every 15 min. Like covis it is bounded by EVENT_RETENTION_DAYS rather than by
+-- lifetime volume. The DELETE + INSERT rewrites the whole (usually small) table
+-- each pass; autovacuum reclaims it, and docs/operations.md names the knobs if it
+-- ever stops keeping up.
+--
+-- No time predicate here, deliberately, for the same reason covis has none: "the
+-- retained ledger" is whatever the retention worker has left, so this reads the
+-- table as it stands rather than second-guessing it with a window of its own.
 INSERT INTO search.query_video_engagement
     (normalized_query, video_id, impressions, clicks, meaningful_watches, updated_at)
 SELECT be.normalized_query, be.video_id,
@@ -179,16 +256,10 @@ SELECT be.normalized_query, be.video_id,
        count(*) FILTER (WHERE be.type = 'video.meaningful_watch'),
        now()
 FROM search.behavior_events be
-WHERE be.id > @cursor AND be.id <= @maxid
-  AND be.normalized_query IS NOT NULL
+WHERE be.normalized_query IS NOT NULL
   AND be.video_id IS NOT NULL
   AND be.type IN ('video.impression', 'search.result_clicked', 'video.meaningful_watch')
-GROUP BY be.normalized_query, be.video_id
-ON CONFLICT (normalized_query, video_id) DO UPDATE SET
-    impressions        = search.query_video_engagement.impressions + EXCLUDED.impressions,
-    clicks             = search.query_video_engagement.clicks + EXCLUDED.clicks,
-    meaningful_watches = search.query_video_engagement.meaningful_watches + EXCLUDED.meaningful_watches,
-    updated_at         = now();
+GROUP BY be.normalized_query, be.video_id;
 
 -- name: ListQueryLogRange :many
 -- Settled query_log rows in the sessionizer's cursor range (session-scoped only),

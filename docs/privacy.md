@@ -176,10 +176,32 @@ Honest per surface:
 | --- | --- | --- |
 | co-visitation `item_neighbors` | fully — the covis-v1 index is a from-scratch rebuild whose co-occurrence counts, cosine normalization mass and floor subject counts all come out of one pairing of the retained `behavior_events` | `SEARCH_COVIS_INTERVAL`, default 15 min |
 | autosuggest `query_aggregates.distinct_users` / `suggestible` | fully — an exact recount over the surviving `query_log`, by the rollup for any string carrying new traffic and by `suggestible_reeval` for every row regardless | rollup `SEARCH_AGGREGATES_INTERVAL` (default 1 min); `suggestible_reeval` daily |
-| `query_aggregates.total_count` / `decayed_freq` | **not at all** — cumulative counters, never recomputed. They carry no identity (a query string and a number), and the gate that decides publication is `distinct_users`, which does recompute | — |
-| `query_video_engagement` | **not at all** — cumulative impression/click/watch counters folded forward by cursor and never pruned. No identity in the rows, and no k-floor reads them; the same shape vidra-search#36 removed from co-visitation, still present here | — |
+| `query_aggregates.total_count` / `decayed_freq` | fully — recomputed from the surviving `query_log` over the retention window, by the rollup for any string carrying new traffic and by `suggestible_reeval` for every row regardless. `decayed_freq` is the ORDER of the aggregate autosuggest stream, so this is what stops a deleted search from keeping a completion the rank it bought | rollup `SEARCH_AGGREGATES_INTERVAL` (default 1 min); `suggestible_reeval` daily |
+| `query_video_engagement` | fully — cleared and rebuilt from the retained `behavior_events` on every pass, the same clear-and-rebuild the co-visitation index uses. These are served numbers, not bookkeeping: advanced search recalls candidates on `clicks > 0` for the query and ranks on the CTR / meaningful-watch rate built from them | `SEARCH_ENGAGEMENT_INTERVAL`, default 5 min |
 | trending (Redis `hll:`/`cnt:`/`trend:`) | **not at all, by construction** — the distinct-subject count is a HyperLogLog sketch built at ingest, and an element cannot be removed from an HLL. It expires with the per-day key TTL. For the same reason trending cannot be *pushed* by a clear either: the sketch does not re-read the ledger, so this bypass never reached it | expires ≤ 8 days |
 | Redis `guard:trend:{domain}:{subject}:{item}` | not deleted — the account id is in the key, but a `MATCH` sweep would walk the whole keyspace on every clear for a rate-limit token | expires with `SEARCH_TREND_CAP_WINDOW`, default 1 h |
+
+So every derived surface except trending now reflects a deletion within a day,
+and trending expires within eight — which is what makes the promise the frontend
+makes about "Clear all" true as written:
+
+> the anonymous popularity totals this site keeps are recomputed without you
+> within a day, except the trending counters, which cannot be edited and instead
+> expire within 8 days.
+
+Two honest caveats, neither of which changes that sentence:
+
+- `suggestible_reeval` **refuses to run on an empty retention window** (see
+  `QueryLogHasRowsInWindow`): with no surviving `query_log` rows at all, every
+  aggregate would recount to zero and the instance would lose its whole
+  autosuggest corpus in one sweep, which signals a wiped or not-yet-ingested
+  ledger far more often than it signals a platform nobody has searched. On such
+  an instance the counters keep their last values until traffic returns — but so
+  does nothing else: there is no surviving row naming anybody either.
+- `user_watch_projection` is **deliberately kept** on a *search*-scope clear (it
+  is deleted on `all` / `PurgeUser`). It is watch personalization, keyed
+  (user, video) with no query in it, and clearing search history must not
+  silently delete it. Which scope the user asked for is core's call.
 
 ## Retention (W2)
 

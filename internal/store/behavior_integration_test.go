@@ -517,7 +517,10 @@ func TestIntegrationEngagementAndMeaningfulWatch(t *testing.T) {
 		t.Errorf("projection weight = %v, want > 1.0 (play + meaningful watch)", weight)
 	}
 
-	// Pass 2 folds the derived meaningful_watch into engagement counters.
+	// A second pass changes nothing: the counters are a rebuild from the retained
+	// ledger, so the meaningful_watch derived in pass 1 was already counted in
+	// pass 1 (it used to need a second pass, because the fold's cursor range
+	// closed before the row it had just derived).
 	runWorker(t, env, "engagement_rollup")
 	var impr, clk, mw int64
 	if err := env.store.Pool.QueryRow(context.Background(),
