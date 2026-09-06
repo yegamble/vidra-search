@@ -110,7 +110,7 @@ func newTestEnv(t *testing.T) *testEnv {
 		sugg:        suggest.NewService(q, suggest.NewStoreAggregate(q), rdb, rdb, rdb, nil),
 		search:      search.NewService(q, loader, experiments, rdb, nil),
 		rec:         recommendation.NewService(q, rdb, loader, experiments, rdb, nil),
-		history:     history.NewService(st),
+		history:     history.NewService(st, rdb),
 		moderation:  moderation.NewService(q),
 		worker:      runner,
 		loader:      loader,

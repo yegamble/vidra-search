@@ -13,22 +13,82 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const anonymizeBehaviorEventsUser = `-- name: AnonymizeBehaviorEventsUser :exec
-UPDATE search.behavior_events SET user_id = NULL WHERE user_id = $1
+const deleteBehaviorEventsForUser = `-- name: DeleteBehaviorEventsForUser :execrows
+DELETE FROM search.behavior_events
+WHERE user_id = $1 OR props->>'user_id' = $1::text
 `
 
-func (q *Queries) AnonymizeBehaviorEventsUser(ctx context.Context, userID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, anonymizeBehaviorEventsUser, userID)
-	return err
+// The props clause is a forward guard, not a second copy of the same predicate.
+// Today the user_id COLUMN and props->>'user_id' agree by construction: every
+// branch of applyBehavior maps the decoded payload's UserID into the column. But
+// props stores the FULL original payload, so a new event type whose handler
+// forgets that one field would leave the account id sitting in the JSON with a
+// NULL column, and a column-only delete would miss it silently and for ever.
+// Matching both makes "no row names this account" true of the row rather than of
+// one of its representations. It costs nothing: behavior_events has no index on
+// user_id, so this was already a sequential scan.
+func (q *Queries) DeleteBehaviorEventsForUser(ctx context.Context, userID pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteBehaviorEventsForUser, userID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
-const anonymizeQueryLogUser = `-- name: AnonymizeQueryLogUser :exec
-UPDATE search.query_log SET user_id = NULL WHERE user_id = $1
+const deleteBehaviorEventsForUserQuery = `-- name: DeleteBehaviorEventsForUserQuery :execrows
+DELETE FROM search.behavior_events
+WHERE (user_id = $1 OR props->>'user_id' = $1::text)
+  AND normalized_query = $2
 `
 
-func (q *Queries) AnonymizeQueryLogUser(ctx context.Context, userID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, anonymizeQueryLogUser, userID)
-	return err
+type DeleteBehaviorEventsForUserQueryParams struct {
+	UserID          pgtype.UUID `json:"user_id"`
+	NormalizedQuery *string     `json:"normalized_query"`
+}
+
+// The per-entry delete's ledger half. "Forget I searched X" and "forget
+// everything" have to mean the same kind of thing: if clear-all deletes, leaving
+// the account's rows for that one query behind would keep them counted toward X's
+// instance-wide distinct-subject floor after the user asked to be forgotten for
+// X. Scoped to rows carrying that query, so a watch with no search context is
+// untouched — and the durable watch projection, which is keyed (user, video) with
+// no query, is not in scope for a search-history action at all.
+func (q *Queries) DeleteBehaviorEventsForUserQuery(ctx context.Context, arg DeleteBehaviorEventsForUserQueryParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteBehaviorEventsForUserQuery, arg.UserID, arg.NormalizedQuery)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteQueryLogForUser = `-- name: DeleteQueryLogForUser :execrows
+DELETE FROM search.query_log WHERE user_id = $1
+`
+
+func (q *Queries) DeleteQueryLogForUser(ctx context.Context, userID pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteQueryLogForUser, userID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteQueryLogForUserQuery = `-- name: DeleteQueryLogForUserQuery :execrows
+DELETE FROM search.query_log
+WHERE user_id = $1 AND normalized_query = $2
+`
+
+type DeleteQueryLogForUserQueryParams struct {
+	UserID          pgtype.UUID `json:"user_id"`
+	NormalizedQuery string      `json:"normalized_query"`
+}
+
+func (q *Queries) DeleteQueryLogForUserQuery(ctx context.Context, arg DeleteQueryLogForUserQueryParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteQueryLogForUserQuery, arg.UserID, arg.NormalizedQuery)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deleteUserSearchHistory = `-- name: DeleteUserSearchHistory :exec
@@ -78,9 +138,38 @@ type ListUserSearchHistoryRow struct {
 }
 
 // Privacy / history queries (W2). Back the GET/DELETE user history endpoints and
-// the user.history_deleted event handler. Deleting personal history NULLs the
-// user_id in the raw logs (anonymization) rather than deleting the rows, so global
-// aggregates stay intact while the data no longer references the user.
+// the user.history_deleted event handler.
+//
+// CLEARING DELETES. It used to anonymize — NULL the user_id and keep the row, so
+// "global aggregates stay intact" — and that was not a weaker version of deletion,
+// it was the opposite of one. Every k-anonymity floor here counts
+//
+//	count(DISTINCT user_id)
+//	  + count(DISTINCT CASE WHEN user_id IS NULL THEN COALESCE(subject_id, session_id) END)
+//
+// and an ATTRIBUTED row carries no subject_id: core mints the day-scoped
+// anonymous pseudonym only for callers with no account, because beside a known
+// account id it would be redundant and a leak. So NULLing user_id dropped every
+// one of that account's rows through to the client-supplied session fallback, and
+// one person who had used three sessions stopped counting as one subject and
+// started counting as THREE. Measured on a real database: a pair one signed-in
+// user co-watched in three sessions read subjects = 1 before the clear and 3
+// after, which took it over the default floor of 3 and PUBLISHED it into the
+// globally-served "watch this next" index. The same move promoted a
+// below-the-floor private query into instance-wide autosuggest. A privacy action
+// that RAISES a distinct-subject count publishes exactly what the floor exists to
+// suppress, and any single account could trigger it deliberately.
+//
+// Deletion is not merely the fix, it is what makes the class of bug impossible:
+// removing rows can only ever lower a distinct-subject count, never raise one.
+// It is also the owner's standing ruling for this area — opt-out means no
+// attributed collection, and a user's contribution must leave the floor AND the
+// scores when their data goes. The aggregates that are recomputed from the
+// ledger (query_aggregates.distinct_users/suggestible, and the whole covis-v1
+// neighbour index, which is a from-scratch rebuild) follow on their next pass.
+//
+// Multi-statement operations run in a single transaction so a partial clear can
+// never leave a half-deleted footprint.
 func (q *Queries) ListUserSearchHistory(ctx context.Context, arg ListUserSearchHistoryParams) ([]ListUserSearchHistoryRow, error) {
 	rows, err := q.db.Query(ctx, listUserSearchHistory, arg.UserID, arg.Off, arg.Lim)
 	if err != nil {
@@ -99,6 +188,41 @@ func (q *Queries) ListUserSearchHistory(ctx context.Context, arg ListUserSearchH
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUserSessionIDs = `-- name: ListUserSessionIDs :many
+SELECT DISTINCT s.session_id::text AS session_id FROM (
+    SELECT ql.session_id FROM search.query_log ql
+     WHERE ql.user_id = $1 AND ql.session_id IS NOT NULL
+    UNION
+    SELECT be.session_id FROM search.behavior_events be
+     WHERE be.user_id = $1 AND be.session_id IS NOT NULL
+) s
+`
+
+// The session ids the account's ledger rows carry, read BEFORE the deletes so the
+// ephemeral Redis recency lists keyed on them can be dropped too. Those lists
+// (sess:q:/sess:v:, 2h TTL) are read back into the account's own autosuggest, so
+// leaving them behind means the queries a user just cleared are still offered to
+// them — the one place a cleared query stays user-visible.
+func (q *Queries) ListUserSessionIDs(ctx context.Context, userID pgtype.UUID) ([]string, error) {
+	rows, err := q.db.Query(ctx, listUserSessionIDs, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var session_id string
+		if err := rows.Scan(&session_id); err != nil {
+			return nil, err
+		}
+		items = append(items, session_id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

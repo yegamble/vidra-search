@@ -507,8 +507,18 @@ func (s *Service) upsertProjection(ctx context.Context, q *sqlcgen.Queries, user
 }
 
 // applyHistoryDeleted purges the personal projections for a user.history_deleted
-// event. watch → watch projection; search → search history + anonymized logs;
-// all → both.
+// event. watch → watch projection; search → search history + the account's rows
+// in the raw ledgers; all → both.
+//
+// The search scope DELETES those ledger rows rather than NULLing their user_id.
+// Anonymizing looked like the gentler option and was the opposite: it dropped the
+// account's rows through the k-anonymity floors' COALESCE(subject_id, session_id)
+// fallback, so one person's N sessions counted as N anonymous subjects and the
+// deletion published what the floor was suppressing. See queries/history.sql.
+//
+// This is core's own path into the same operation the DELETE endpoint drives, so
+// the two must not drift; history.Service is the endpoint's copy of this logic
+// and both are covered by TestIntegrationClearAll*.
 func applyHistoryDeleted(ctx context.Context, q *sqlcgen.Queries, p userHistoryDeletedPayload) error {
 	if p.Scope == "watch" || p.Scope == "all" {
 		if err := q.PurgeUserWatchProjection(ctx, p.UserID); err != nil {
@@ -519,10 +529,10 @@ func applyHistoryDeleted(ctx context.Context, q *sqlcgen.Queries, p userHistoryD
 		if err := q.DeleteUserSearchHistory(ctx, p.UserID); err != nil {
 			return err
 		}
-		if err := q.AnonymizeQueryLogUser(ctx, pgconv.UUID(p.UserID)); err != nil {
+		if _, err := q.DeleteQueryLogForUser(ctx, pgconv.UUID(p.UserID)); err != nil {
 			return err
 		}
-		if err := q.AnonymizeBehaviorEventsUser(ctx, pgconv.UUID(p.UserID)); err != nil {
+		if _, err := q.DeleteBehaviorEventsForUser(ctx, pgconv.UUID(p.UserID)); err != nil {
 			return err
 		}
 	}

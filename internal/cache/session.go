@@ -74,3 +74,28 @@ func (c *Cache) SessionVideos(ctx context.Context, sessionID string) []string {
 	}
 	return vals
 }
+
+// DropSessionRecency deletes the recent-query and recent-video lists for the
+// given sessions. It is the Redis half of a history deletion: those lists are
+// read straight back into the account's own autosuggest and session-intent
+// ranking, so a clear that only removed rows would keep offering the user the
+// queries they just cleared for up to sessionTTL.
+//
+// Sessions are named explicitly (the caller reads them out of the ledger before
+// deleting it) rather than found by SCAN: the keys are keyed by session, not by
+// account, so there is no pattern that means "this user's" — and a MATCH sweep
+// would walk the whole keyspace on every clear. Best-effort, like every other
+// write here; the lists expire on their own within sessionTTL.
+func (c *Cache) DropSessionRecency(ctx context.Context, sessionIDs []string) error {
+	keys := make([]string, 0, 2*len(sessionIDs))
+	for _, id := range sessionIDs {
+		if id == "" {
+			continue
+		}
+		keys = append(keys, sessionQueryKey(id), sessionVideoKey(id))
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	return c.Client.Del(ctx, keys...).Err()
+}
