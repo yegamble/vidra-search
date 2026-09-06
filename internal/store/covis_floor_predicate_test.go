@@ -66,3 +66,23 @@ func TestCovisFloorPairsExactlyLikeTheAccumulators(t *testing.T) {
 			"Expected exactly:\n%s", got, covisPairPredicate)
 	}
 }
+
+// TestCovisRebuildReadsOnlyTheRetainedLedger pins the retention ruling at the
+// source level: the served neighbour index is a function of `behavior_events` and
+// of nothing else. `co_watch` / `co_search` were cumulative and unpruned, so any
+// reference to them from this file is a co-occurrence number that outlives the
+// events it was derived from — which is the whole defect. An integration test can
+// only catch that on a fixture whose retention boundary it happens to straddle;
+// this catches the reference itself, including one added for the normalization
+// mass, where the effect on any single score is small enough to look like drift.
+func TestCovisRebuildReadsOnlyTheRetainedLedger(t *testing.T) {
+	for _, table := range []string{"search.co_watch", "search.co_search"} {
+		if strings.Contains(covisSQL(t), table) {
+			t.Errorf("covisitation.sql references %s. The co-visitation counters are RETIRED: "+
+				"they are cumulative and nothing prunes them, so a score read from them keeps "+
+				"counting co-visits retention (or a user's purge) has already deleted. Pair "+
+				"counts, normalization mass and floor support all come from the retained "+
+				"behavior_events ledger.", table)
+		}
+	}
+}
