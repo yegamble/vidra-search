@@ -229,14 +229,20 @@ type impressionPayload struct {
 // lane). Core sets it on every anonymous event in the batch, not just searches;
 // leaving it undecoded here left video trending keyed on the forgeable
 // session_id after the query domain had been fixed.
+//
+// AllowPersonalization is the A13 opt-out ruling's consent flag for
+// user_watch_projection specifically. It is a POINTER because absent and false
+// must differ: a vidra-core older than the ruling sends no such field and the
+// projection has to keep following allow_history (see projectionConsent).
 type playStartedPayload struct {
-	VideoID      uuid.UUID  `json:"video_id"`
-	UserID       *uuid.UUID `json:"user_id"`
-	SessionID    *string    `json:"session_id"`
-	SubjectID    *string    `json:"subject_id"`
-	Context      string     `json:"context"`
-	Query        *string    `json:"query"`
-	AllowHistory bool       `json:"allow_history"`
+	VideoID              uuid.UUID  `json:"video_id"`
+	UserID               *uuid.UUID `json:"user_id"`
+	SessionID            *string    `json:"session_id"`
+	SubjectID            *string    `json:"subject_id"`
+	Context              string     `json:"context"`
+	Query                *string    `json:"query"`
+	AllowHistory         bool       `json:"allow_history"`
+	AllowPersonalization *bool      `json:"allow_personalization"`
 }
 
 type watchProgressPayload struct {
@@ -246,10 +252,11 @@ type watchProgressPayload struct {
 }
 
 type videoCompletedPayload struct {
-	VideoID      uuid.UUID  `json:"video_id"`
-	UserID       *uuid.UUID `json:"user_id"`
-	SessionID    *string    `json:"session_id"`
-	AllowHistory bool       `json:"allow_history"`
+	VideoID              uuid.UUID  `json:"video_id"`
+	UserID               *uuid.UUID `json:"user_id"`
+	SessionID            *string    `json:"session_id"`
+	AllowHistory         bool       `json:"allow_history"`
+	AllowPersonalization *bool      `json:"allow_personalization"`
 }
 
 // suggestionEventPayload covers search.suggestions_shown / suggestion_selected —

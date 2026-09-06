@@ -367,6 +367,7 @@ func (s *Service) applyBehavioral(ctx context.Context, q *sqlcgen.Queries, ev En
 				return nil, err
 			}
 		}
+		// The user's own search-history page: allow_history and nothing else.
 		if p.AllowHistory && p.UserID != nil && nq != "" {
 			if err := q.UpsertUserSearchHistory(ctx, sqlcgen.UpsertUserSearchHistoryParams{
 				UserID: *p.UserID, NormalizedQuery: nq, DisplayQuery: display, LastUsedAt: eventTime(ev),
@@ -397,7 +398,7 @@ func (s *Service) applyBehavioral(ctx context.Context, q *sqlcgen.Queries, ev En
 		}); err != nil {
 			return nil, err
 		}
-		if p.AllowHistory && p.UserID != nil {
+		if p.personalizationAllowed() && p.UserID != nil {
 			if err := s.upsertProjection(ctx, q, *p.UserID, p.VideoID, weightPlayStarted); err != nil {
 				return nil, err
 			}
@@ -419,7 +420,7 @@ func (s *Service) applyBehavioral(ctx context.Context, q *sqlcgen.Queries, ev En
 		}); err != nil {
 			return nil, err
 		}
-		if p.AllowHistory && p.UserID != nil {
+		if p.personalizationAllowed() && p.UserID != nil {
 			if err := s.upsertProjection(ctx, q, *p.UserID, p.VideoID, weightCompleted); err != nil {
 				return nil, err
 			}

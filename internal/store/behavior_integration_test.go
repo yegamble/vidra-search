@@ -62,6 +62,24 @@ func watch(occurredAt time.Time, videoID uuid.UUID, positionSeconds float64, use
 	return behEnv(event.TypeVideoWatchProgress, occurredAt, p)
 }
 
+// playWithConsent is play() plus the A13 ruling's explicit per-store consent
+// flags, so a fixture can set them apart. play() itself deliberately still sends
+// allow_history ONLY, which is also the pre-ruling core's wire shape and
+// therefore the compatibility fallback under test.
+func playWithConsent(occurredAt time.Time, videoID uuid.UUID, user *uuid.UUID, session string, allowHistory, allowPersonalization bool) event.Envelope {
+	p := map[string]any{
+		"video_id": videoID.String(), "context": "search",
+		"allow_history": allowHistory, "allow_personalization": allowPersonalization,
+	}
+	if user != nil {
+		p["user_id"] = user.String()
+	}
+	if session != "" {
+		p["session_id"] = session
+	}
+	return behEnv(event.TypeVideoPlayStarted, occurredAt, p)
+}
+
 func clicked(occurredAt time.Time, query string, videoID uuid.UUID, user *uuid.UUID, session string) event.Envelope {
 	p := map[string]any{"query": query, "video_id": videoID.String()}
 	if user != nil {
@@ -266,6 +284,64 @@ func TestIntegrationAllowHistoryEnforcement(t *testing.T) {
 	runWorker(t, env, "engagement_rollup")
 	if n := countRows(t, env, "SELECT count(*) FROM search.user_watch_projection WHERE user_id = $1", u); n != 0 {
 		t.Errorf("NO watch projection may be written without allow_history, got %d", n)
+	}
+}
+
+// TestIntegrationProjectionFollowsPersonalizationNotHistory is the A13 opt-out
+// ruling at the table level: with the history control ON and personalization
+// OFF the user's own search-history rows are still written and the watch
+// projection is NOT, and with the two swapped it is exactly the other way round.
+// Before the ruling one flag decided both, so half of each of these users got a
+// store they had switched off.
+func TestIntegrationProjectionFollowsPersonalizationNotHistory(t *testing.T) {
+	env := newTestEnv(t)
+	now := time.Now()
+	historyOnly, personalizationOnly := uuid.New(), uuid.New()
+	v := uuid.New()
+
+	ingest(t, env,
+		submitted(now, "keeps their history", &historyOnly, "s-h", true),
+		playWithConsent(now, v, &historyOnly, "s-h", true, false),
+		submitted(now, "keeps their rails", &personalizationOnly, "s-p", false),
+		playWithConsent(now, v, &personalizationOnly, "s-p", false, true),
+	)
+
+	if n := countRows(t, env, "SELECT count(*) FROM search.user_search_history WHERE user_id = $1", historyOnly); n != 1 {
+		t.Errorf("history-only user's search history rows = %d, want 1 — the history control is theirs alone", n)
+	}
+	if n := countRows(t, env, "SELECT count(*) FROM search.user_watch_projection WHERE user_id = $1", historyOnly); n != 0 {
+		t.Errorf("history-only user's watch projection rows = %d, want 0 — keeping a search history must not build a personalization vector", n)
+	}
+	if n := countRows(t, env, "SELECT count(*) FROM search.user_search_history WHERE user_id = $1", personalizationOnly); n != 0 {
+		t.Errorf("personalization-only user's search history rows = %d, want 0", n)
+	}
+	if n := countRows(t, env, "SELECT count(*) FROM search.user_watch_projection WHERE user_id = $1", personalizationOnly); n != 1 {
+		t.Errorf("personalization-only user's watch projection rows = %d, want 1", n)
+	}
+	// Both raw ledgers are untouched by the split: attribution is core's
+	// decision, and these two users ARE attributed (each kept one control on).
+	for _, u := range []uuid.UUID{historyOnly, personalizationOnly} {
+		if n := countRows(t, env, "SELECT count(*) FROM search.behavior_events WHERE user_id = $1", u); n != 2 {
+			t.Errorf("behavior_events for %s = %d, want 2", u, n)
+		}
+	}
+}
+
+// TestIntegrationProjectionFallsBackToAllowHistoryWhenFieldAbsent pins the
+// rolling-upgrade half: a vidra-core older than the ruling sends no
+// allow_personalization at all, and the projection must keep behaving exactly as
+// it did rather than silently stopping for every user while the two versions run
+// side by side.
+func TestIntegrationProjectionFallsBackToAllowHistoryWhenFieldAbsent(t *testing.T) {
+	env := newTestEnv(t)
+	now := time.Now()
+	u := uuid.New()
+	v := uuid.New()
+
+	ingest(t, env, play(now, v, "", &u, "s-old", true)) // no allow_personalization key at all
+
+	if n := countRows(t, env, "SELECT count(*) FROM search.user_watch_projection WHERE user_id = $1", u); n != 1 {
+		t.Errorf("watch projection rows = %d, want 1 — an absent allow_personalization must fall back to allow_history", n)
 	}
 }
 
