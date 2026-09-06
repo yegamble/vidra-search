@@ -54,6 +54,24 @@ is neither suggestible nor trending, whether they are signed in or anonymous and
 rotating `X-Vidra-Session` (both proven by
 `TestIntegrationManipulationResistance`).
 
+**Co-visitation neighbours carry the same floor, and for the same reason.**
+`search.item_neighbors` is a globally-served "watch this next" index, so an edge
+published off one person's browsing tells every viewer something about that
+person: before this gate the only filter was `score > 0`, and one session opening
+three videos published three public associations. The neighbour rebuild now
+publishes a pair only once at least `MIN_QUERY_USER_COUNT` **distinct subjects**
+co-visited it, counted by the identical expression — the account id when signed
+in, else `subject_id`, else `session_id`. Shrinkage was never this gate:
+`cooc/(cooc+λ)` ranks a one-person pair low, it still publishes it, and on a quiet
+instance low is first. Support is recomputed from the retained `behavior_events`
+each pass, never from the cumulative `co_watch`/`co_search` counters — those hold
+visits rather than people (six co-visits by one subject is `count = 6`) and are
+never pruned, so an edge read out of them would outlive the evidence retention
+deleted. The honest cost is the mirror of trending's: on a small or quiet
+instance, real associations now fail the gate and the related rail thins or
+empties rather than ranking lower; `docs/operations.md` names the symptom and the
+query that confirms it is the floor and not a broken rollup.
+
 `subject_id` is derived in vidra-core, not here: a keyed, day-scoped pseudonym of
 the connecting address, domain-separated from every other pseudonym core mints,
 set only on ANONYMOUS events, stripped from any client-supplied copy, and frozen
@@ -68,8 +86,8 @@ Two honest limits. Because the subject rotates daily, one determined anonymous
 actor can still reach a floor of 3 by searching on 3 different UTC days; the
 attack is not closed, its cost moves from three requests to three days. And
 because the subject is address-derived, a NAT/CGNAT/campus egress collapses many
-real people into one subject — which UNDER-counts and yields FEWER suggestions and
-FEWER trending items, never more. On trending that under-count is felt harder than
+real people into one subject — which UNDER-counts and yields FEWER suggestions,
+FEWER trending items and FEWER neighbour edges, never more. On trending that under-count is felt harder than
 on suggestions, because trending is a ranking surface with a hard distinct-user
 gate: a query genuinely popular behind one shared egress now fails the gate
 outright rather than ranking lower. That trade is taken knowingly — the identity
