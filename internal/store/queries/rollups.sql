@@ -130,14 +130,26 @@ SELECT
         AND be.occurred_at <= wp.occurred_at
       ORDER BY be.occurred_at DESC LIMIT 1),
     wp.video_id, wp.occurred_at,
-    -- subject_id is carried over from the watch_progress row it is derived from.
-    -- It is not decoration: video.meaningful_watch is one of the two event types
-    -- the co-visitation floor counts, and a derived row with no subject falls back
-    -- to the client-controlled session_id — so dropping it here handed an
-    -- anonymous client rotating X-Vidra-Session a way to manufacture N distinct
-    -- "people" behind a pair whose play_started half correctly counted one.
-    -- Rows derived before this change keep subject_id NULL and keep counting
-    -- through the session fallback, the same as pre-0016 query_log rows.
+    -- subject_id is carried over from the watch_progress row this is derived
+    -- from. video.meaningful_watch is one of the two event types the
+    -- co-visitation k-anonymity floor counts, and unlike every other event it
+    -- counts, this one is SYNTHESISED here — its props are whatever this object
+    -- builds. A derived row with no subject falls through to
+    -- COALESCE(subject_id, session_id) and is counted under the client-controlled
+    -- session id, so an anonymous actor rotating X-Vidra-Session would present as
+    -- N distinct "people" behind a pair whose play_started half correctly counted
+    -- one.
+    --
+    -- Be honest about what this does today: NOTHING. vidra-core emits
+    -- video.watch_progress only from the authenticated PUT
+    -- /videos/:id/watch-progress route, always with a user_id, and the type is not
+    -- on the public POST /search/events allowlist — so no anonymous watch_progress
+    -- exists to carry a subject, this expression copies NULL, and the floor counts
+    -- the user_id. It is a forward guard, and a cheap one: the day that route
+    -- accepts an anonymous beacon or the type joins the allowlist, the derived row
+    -- would silently start counting a forgeable identity with nothing failing.
+    -- TestIntegrationCovisFloorCountsSubjectsOnDerivedMeaningfulWatches drives
+    -- that shape directly and fails without this line.
     jsonb_build_object('allow_history', COALESCE((wp.props->>'allow_history')::boolean, false),
                        'derived_from', 'watch_progress',
                        'subject_id', wp.props->>'subject_id')

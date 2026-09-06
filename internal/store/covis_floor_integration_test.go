@@ -181,14 +181,23 @@ func anonWatch(occurredAt time.Time, videoID uuid.UUID, positionSeconds float64,
 	return behEnv(event.TypeVideoWatchProgress, occurredAt, p)
 }
 
-// TestIntegrationCovisFloorCountsSubjectsOnDerivedMeaningfulWatches closes the
-// half of the floor that the play_started path alone would leave open.
-// video.meaningful_watch is one of the two event types co_watch pairs, and it is
-// SYNTHESISED here rather than sent by core — so its props are whatever
-// DeriveMeaningfulWatch builds. While that object dropped subject_id, a derived
-// row fell back to the client-controlled session_id, and one anonymous machine
-// rotating X-Vidra-Session manufactured N "people" behind a pair on a path where
-// the play_started half correctly counted one.
+// TestIntegrationCovisFloorCountsSubjectsOnDerivedMeaningfulWatches is a FORWARD
+// GUARD on the one event type the floor counts that this service synthesises
+// itself. video.meaningful_watch is derived by DeriveMeaningfulWatch, so its
+// props are whatever that jsonb_build_object builds; while that object dropped
+// subject_id, a derived row fell through to the client-controlled session_id and
+// an anonymous actor rotating X-Vidra-Session presented as N distinct "people"
+// behind a pair whose play_started half correctly counted one.
+//
+// State plainly what this does NOT prove: that shape is not reachable through
+// today's vidra-core. video.watch_progress is emitted only from the
+// authenticated PUT /videos/:id/watch-progress route (always with a user_id) and
+// is not on the public POST /search/events allowlist, so no anonymous
+// watch_progress exists and the floor counts the user_id. This fixture therefore
+// drives the search service directly, the way core WOULD if that route ever
+// accepted an anonymous beacon or the type joined the allowlist — which is
+// exactly when a synthesised row silently counting a forgeable identity would
+// otherwise ship with nothing failing.
 func TestIntegrationCovisFloorCountsSubjectsOnDerivedMeaningfulWatches(t *testing.T) {
 	env := newTestEnv(t)
 	now := time.Now()
