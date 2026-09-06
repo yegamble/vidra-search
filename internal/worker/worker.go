@@ -373,18 +373,30 @@ func (r *Runner) engagementRollup(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if maxid <= cursor {
-		return tx.Commit(ctx)
+	// The cursor governs DERIVATION only. A derived meaningful_watch must be
+	// produced exactly once — the worker applies a projection weight and a trend
+	// bump for each new row after commit — so that half still advances a bookmark.
+	// The counter REBUILD below has no cursor and runs on every pass, including
+	// passes with no new events at all: that is the only way a counter can fall
+	// when retention or a user's purge takes its evidence away.
+	var newMW []sqlcgen.DeriveMeaningfulWatchRow
+	if maxid > cursor {
+		newMW, err = q.DeriveMeaningfulWatch(ctx, sqlcgen.DeriveMeaningfulWatchParams{
+			Cursor: cursor, Maxid: maxid,
+			MwSeconds: float64(mwSeconds), MwFraction: float64(mwPct) / 100.0,
+		})
+		if err != nil {
+			return err
+		}
 	}
-
-	newMW, err := q.DeriveMeaningfulWatch(ctx, sqlcgen.DeriveMeaningfulWatchParams{
-		Cursor: cursor, Maxid: maxid,
-		MwSeconds: float64(mwSeconds), MwFraction: float64(mwPct) / 100.0,
-	})
-	if err != nil {
+	// The counters are a from-scratch rebuild from the retained ledger, not a
+	// fold of the cursor range: see queries/rollups.sql. The rows just derived
+	// above are already in behavior_events inside this transaction, so they are
+	// counted in this pass rather than the next one.
+	if err := q.ClearQueryVideoEngagement(ctx); err != nil {
 		return err
 	}
-	if err := q.FoldEngagement(ctx, sqlcgen.FoldEngagementParams{Cursor: cursor, Maxid: maxid}); err != nil {
+	if err := q.RebuildQueryVideoEngagement(ctx); err != nil {
 		return err
 	}
 
@@ -414,8 +426,14 @@ func (r *Runner) engagementRollup(ctx context.Context) error {
 		bumps = append(bumps, bump{item: vid.String(), subject: subject})
 	}
 
-	if err := q.SetWorkerCursor(ctx, sqlcgen.SetWorkerCursorParams{CursorName: "engagement", CursorPos: maxid}); err != nil {
-		return err
+	// Advance only forward. Now that the pass runs with no new events, maxid can
+	// be BELOW the bookmark — retention emptying the ledger makes MaxBehaviorEventID
+	// COALESCE to 0 — and writing that back would rewind the derivation cursor over
+	// a range whose rows are gone.
+	if maxid > cursor {
+		if err := q.SetWorkerCursor(ctx, sqlcgen.SetWorkerCursorParams{CursorName: "engagement", CursorPos: maxid}); err != nil {
+			return err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return err
