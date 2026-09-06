@@ -112,7 +112,10 @@ DELETE FROM search.item_neighbors WHERE model_version = 'covis-v1'
 `
 
 // Step 1 of the neighbor rebuild: drop the covis-v1 index so it can be recomputed
-// from the current co_* counters (both run in the covis worker's transaction).
+// from the current co_* counters AND the currently retained event ledger (both
+// run in the covis worker's transaction). Dropping first is what lets an edge
+// LEAVE the index — when retention takes its support below the k-anonymity floor,
+// or when the operator raises that floor — rather than only ever being added to.
 func (q *Queries) ClearCovisNeighbors(ctx context.Context) error {
 	_, err := q.db.Exec(ctx, clearCovisNeighbors)
 	return err
