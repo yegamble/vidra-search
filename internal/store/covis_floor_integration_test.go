@@ -349,3 +349,51 @@ func TestIntegrationCovisFloorDropsEdgeWhenRetentionPrunesItsSupport(t *testing.
 		t.Errorf("once retention leaves fewer than the floor's subjects behind, the edge must disappear on the next rollup")
 	}
 }
+
+// TestIntegrationCovisFloorLeavesTheNormalizationMassIntact pins the choice that
+// is easiest to get wrong and hardest to notice: the floor gates PUBLICATION, not
+// counting, so a dropped pair still contributes its co-occurrence mass to the
+// cosine's denominator for the pairs that survive.
+//
+// Filtering the totals as well looks tidier and is a silent relevance change: it
+// re-scales every surviving neighbour of any item that had a below-floor pair,
+// upward, in proportion to how much private browsing that item attracted. The
+// fixture separates the two readings numerically — X is co-watched with Y by three
+// users (published) and with Z by one (dropped), so totX is 4 with the mass intact
+// and 3 without.
+func TestIntegrationCovisFloorLeavesTheNormalizationMassIntact(t *testing.T) {
+	env := newTestEnv(t)
+	now := time.Now()
+
+	x, y, z := uuid.New(), uuid.New(), uuid.New()
+	for i := 0; i < 3; i++ {
+		u := uuid.New()
+		sess := fmt.Sprintf("kf-mass-%d", i)
+		ingest(t, env,
+			play(now, x, "", &u, sess, false),
+			play(now.Add(time.Second), y, "", &u, sess, false))
+	}
+	loner := uuid.New()
+	ingest(t, env,
+		play(now, x, "", &loner, "kf-mass-solo", false),
+		play(now.Add(time.Second), z, "", &loner, "kf-mass-solo", false))
+
+	runWorker(t, env, "covis_rollup")
+
+	if _, ok := neighborEdge(t, env, x, z); ok {
+		t.Errorf("the one-person X-Z pair must not be published")
+	}
+	score, ok := neighborEdge(t, env, x, y)
+	if !ok {
+		t.Fatalf("the three-person X-Y pair must be published")
+	}
+	// totX = 3 (X-Y) + 1 (X-Z, dropped but still counted mass), totY = 3:
+	// 0.7 · (3/sqrt(4·3)) · (3/13) = 0.13990.
+	// Had the floor also filtered the totals, totX would be 3 and this would read
+	// 0.16154 — the score X-Y would have had if Z had never been watched.
+	if math.Abs(score-0.13989560) > 1e-6 {
+		t.Errorf("X→Y score = %.8f, want 0.13990 (totX = 4, mass intact). "+
+			"0.16154 here means the floor was applied to the normalization totals too, "+
+			"which silently re-scales every surviving neighbour", score)
+	}
+}
