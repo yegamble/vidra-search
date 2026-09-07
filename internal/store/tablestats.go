@@ -29,6 +29,11 @@ type TableRowEstimate struct {
 //     the documented "unknown" sentinel, deliberately distinct from 0 so the
 //     planner can tell a never-analyzed table from an empty one.
 //
+// n_live_tup is also not synchronous: a backend's pending counts reach the
+// statistics system on its next report, which the server rate-limits to about
+// once a second. That is invisible to a scraper reading every 15-60s and is
+// only ever visible to a test that writes and reads back-to-back.
+//
 // Both remain ESTIMATES, and n_live_tup is the looser of the two after bulk
 // work: measured in the same lab, repeated TRUNCATE+insert cycles left it
 // reading 6 for a table holding 1, and a plain ANALYZE reconciled both

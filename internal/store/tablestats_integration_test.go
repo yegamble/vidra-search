@@ -13,6 +13,7 @@ package store_test
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 func TestIntegrationTableRowEstimatesSeeRowsBeforeAnyAnalyze(t *testing.T) {
@@ -27,19 +28,40 @@ func TestIntegrationTableRowEstimatesSeeRowsBeforeAnyAnalyze(t *testing.T) {
 		t.Fatalf("ingest did not land: %+v", res)
 	}
 
-	rows, err := env.store.TableRowEstimates(ctx)
-	if err != nil {
-		t.Fatalf("table row estimates: %v", err)
-	}
-	if len(rows) == 0 {
-		t.Fatal("no tables reported for the search schema")
-	}
-	byTable := map[string]*int64{}
-	for _, r := range rows {
-		byTable[r.Table] = r.Rows
+	// The cumulative statistics system flushes a backend's pending counts on its
+	// next report, which the server rate-limits to roughly once a second, so a
+	// read taken immediately after the ingest can legitimately still say zero.
+	// That lag is fine for a gauge a scraper reads every 15-60s, and it is why
+	// this polls instead of asserting once — the claim under test is "the
+	// never-analyzed sentinel is not read as empty", not "the statistics are
+	// synchronous".
+	deadline := time.Now().Add(10 * time.Second)
+	var last map[string]*int64
+	for {
+		rows, err := env.store.TableRowEstimates(ctx)
+		if err != nil {
+			t.Fatalf("table row estimates: %v", err)
+		}
+		if len(rows) == 0 {
+			t.Fatal("no tables reported for the search schema")
+		}
+		last = map[string]*int64{}
+		for _, r := range rows {
+			last[r.Table] = r.Rows
+		}
+		ok := true
+		for _, table := range []string{"documents", "events_inbox"} {
+			if v, present := last[table]; !present || v == nil || *v < 1 {
+				ok = false
+			}
+		}
+		if ok || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
 	}
 	for _, table := range []string{"documents", "events_inbox"} {
-		got, ok := byTable[table]
+		got, ok := last[table]
 		if !ok {
 			t.Fatalf("%s missing from the estimates", table)
 		}
@@ -47,7 +69,7 @@ func TestIntegrationTableRowEstimatesSeeRowsBeforeAnyAnalyze(t *testing.T) {
 			t.Fatalf("%s reported no estimate at all", table)
 		}
 		if *got < 1 {
-			t.Errorf("%s estimated at %d rows after a successful ingest — the "+
+			t.Errorf("%s still estimated at %d rows 10s after a successful ingest — the "+
 				"never-analyzed reltuples sentinel is being read as empty", table, *got)
 		}
 	}
