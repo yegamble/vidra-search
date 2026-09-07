@@ -173,10 +173,13 @@ func (m *Metrics) SetShadowMetric(version, metric string, value float64) {
 	m.shadowEval.WithLabelValues(version, metric).Set(value)
 }
 
-// TableDepth is one table's approximate row count.
+// TableDepth is one table's approximate row count. Rows is a POINTER because
+// "PostgreSQL cannot answer" is a real state and is not the same fact as "the
+// table is empty" — see store.TableRowEstimates. A nil estimate emits NO series
+// at all, so a dashboard shows a gap rather than a confident zero.
 type TableDepth struct {
 	Table string
-	Rows  int64
+	Rows  *int64
 }
 
 // RegisterTableDepthSource installs vidra_search_table_rows{table} pulled from
@@ -208,7 +211,10 @@ func (c *tableDepthCollector) Collect(ch chan<- prometheus.Metric) {
 		return
 	}
 	for _, r := range rows {
-		ch <- prometheus.MustNewConstMetric(c.desc, prometheus.GaugeValue, float64(r.Rows), r.Table)
+		if r.Rows == nil {
+			continue
+		}
+		ch <- prometheus.MustNewConstMetric(c.desc, prometheus.GaugeValue, float64(*r.Rows), r.Table)
 	}
 }
 
