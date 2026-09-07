@@ -189,28 +189,20 @@ func workerConfig(cfg *config.Config) worker.Config {
 	}
 }
 
-// tableDepthSource samples approximate row counts for the search schema's tables
-// from the planner statistics (cheap; run at scrape time). It uses the raw pool
-// because pg_class is a system catalog outside sqlc's analyzed schema.
+// tableDepthSource adapts the store's row-estimate reader to the gauge source
+// shape. The estimate's choice of statistic (and why a nil is not a zero) lives
+// in store.TableRowEstimates.
 func tableDepthSource(st *store.Store) func(context.Context) ([]telemetry.TableDepth, error) {
-	const query = `SELECT c.relname, GREATEST(c.reltuples, 0)::bigint
-FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-WHERE n.nspname = 'search' AND c.relkind = 'r'`
 	return func(ctx context.Context) ([]telemetry.TableDepth, error) {
-		rows, err := st.Pool.Query(ctx, query)
+		rows, err := st.TableRowEstimates(ctx)
 		if err != nil {
 			return nil, err
 		}
-		defer rows.Close()
-		var out []telemetry.TableDepth
-		for rows.Next() {
-			var d telemetry.TableDepth
-			if err := rows.Scan(&d.Table, &d.Rows); err != nil {
-				return nil, err
-			}
-			out = append(out, d)
+		out := make([]telemetry.TableDepth, 0, len(rows))
+		for _, r := range rows {
+			out = append(out, telemetry.TableDepth{Table: r.Table, Rows: r.Rows})
 		}
-		return out, rows.Err()
+		return out, nil
 	}
 }
 
