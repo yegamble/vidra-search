@@ -29,6 +29,13 @@ type TableRowEstimate struct {
 //     the documented "unknown" sentinel, deliberately distinct from 0 so the
 //     planner can tell a never-analyzed table from an empty one.
 //
+// Both remain ESTIMATES, and n_live_tup is the looser of the two after bulk
+// work: measured in the same lab, repeated TRUNCATE+insert cycles left it
+// reading 6 for a table holding 1, and a plain ANALYZE reconciled both
+// statistics to 1. That is drift in a number the metric's own help text calls
+// approximate. Reading a sentinel as a count is not drift — it is a different
+// answer to a different question, and it is what this fixes.
+//
 // Reading reltuples alone and clamping it at zero (the shape this replaced)
 // therefore reported EVERY table as empty on a young instance: measured in the
 // A35 lab, `vidra_search_table_rows` was 0 for all fifteen tables while
