@@ -63,22 +63,7 @@ jobs:
           echo "OK: no unmarked continue-on-error."
 
       - name: Every required check name is a job some workflow defines
-        run: |
-          missing=""
-          while IFS= read -r raw; do
-            name=${raw%%#*}
-            name=$(printf '%s' "$name" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s/^?//')
-            [ -n "$name" ] || continue
-            if ! grep -rqE "^[[:space:]]{2}${name}:|name: ${name}\$" .github/workflows; then
-              missing="${missing}${name}"$'\n'
-            fi
-          done < .github/required-checks.txt
-          if [ -n "$missing" ]; then
-            echo "::error::required-checks.txt names checks no workflow defines (renamed or deleted job?):" >&2
-            printf '%s' "$missing" | sed 's/^/  /' >&2
-            exit 1
-          fi
-          echo "OK: every entry in .github/required-checks.txt maps to a defined job."
+        run: bash scripts/ci/check-required-manifest.sh
 
       - name: Search CI runs the canonical gate
         run: |
