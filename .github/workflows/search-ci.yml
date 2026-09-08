@@ -13,6 +13,9 @@ on:
 permissions:
   contents: read
 
+env:
+  GOFLAGS: -mod=readonly
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -52,9 +55,19 @@ jobs:
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26"
+          go-version: "1.27"
           cache: true
           cache-dependency-path: go.sum
+
+      # EXACT MANIFEST. `go mod verify` re-hashes every module in the build list
+      # against go.sum, so a tampered or re-tagged dependency fails here rather
+      # than compiling silently; `go mod tidy -diff` fails when go.mod/go.sum are
+      # not what this source tree actually requires — the module-graph equivalent
+      # of a stale lockfile. TWIN: vidra-core backend-ci.yml.
+      - name: Exact module manifest (go mod verify + tidy diff)
+        run: |
+          go mod verify
+          go mod tidy -diff
 
       # Pinned to the Makefile's SQLC_VERSION so `make ci`'s sqlc-verify takes the
       # fast binary path instead of compiling sqlc via `go run` each run.
@@ -74,8 +87,28 @@ jobs:
           DATABASE_URL: postgres://vidra_search:vidra_search@localhost:5432/vidra_search?sslmode=disable
         run: go run ./cmd/api migrate up
 
+      # STATIC no-silent-skip gate. `make ci` runs `go test -race ./...`
+      # non-verbosely, where a skipped test prints nothing at all, so a test in
+      # the DEFAULT build that self-skips on a missing env var would be part of
+      # the required gate in name only. The allowlist is empty here and should
+      # stay that way: the unit suite runs against in-memory fakes.
+      - name: No self-skipping tests in the canonical suite
+        run: bash scripts/ci/assert-no-untagged-skips.sh
+
       - name: Run canonical gate (make ci)
         env:
           DATABASE_URL: postgres://vidra_search:vidra_search@localhost:5432/vidra_search?sslmode=disable
           REDIS_URL: redis://localhost:6379/0
-        run: make ci
+        run: |
+          mkdir -p ci-report
+          set -o pipefail
+          make ci 2>&1 | tee ci-report/make-ci.log
+
+      - name: Upload canonical gate log
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: search-make-ci-log
+          path: ci-report/
+          retention-days: 14
+          if-no-files-found: warn

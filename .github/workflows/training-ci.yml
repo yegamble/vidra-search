@@ -50,8 +50,34 @@ jobs:
       - name: Install the locked training environment
         run: uv sync --locked --all-extras
 
+      # `-rs` reports every skip by name and --junitxml is the artifact. pytest
+      # exits 5 when it collects nothing, so an empty suite already fails; the
+      # step after fails on a suite that collected tests and skipped them, which
+      # is the shape a broken optional dependency would take.
       - name: Run the training smoke test (synthetic data, no DB)
-        run: uv run --locked pytest -q
+        run: |
+          mkdir -p ../ci-report
+          uv run --locked pytest -q -rs --junitxml=../ci-report/training-junit.xml
+
+      - name: No silent skips in the training suite
+        working-directory: ${{ github.workspace }}
+        run: |
+          f=ci-report/training-junit.xml
+          if grep -qE 'skipped="[1-9]' "$f"; then
+            echo "::error::the training suite skipped tests — a required lane must not pass by skipping:" >&2
+            grep -oE '<skipped[^>]*>' "$f" >&2 || true
+            exit 1
+          fi
+          echo "OK: training suite, 0 skipped."
+
+      - name: Upload training test report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: search-training-junit
+          path: ci-report/
+          retention-days: 14
+          if-no-files-found: warn
 
       - name: Prove the CLI smoke path emits a leaves-loadable artifact
         run: |

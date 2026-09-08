@@ -1,0 +1,51 @@
+name: ci-required
+
+# ONE named check that stands for this repo's whole required set (A39 / QLT-01).
+#
+# GitHub's `needs:` cannot reach across workflows, and this repo's required
+# lanes are in separate files on purpose — different services, different
+# runtimes, different path filters. TWIN: vidra-core .github/workflows/ci-required.yml. Without a fan-in, "required for merge" would
+# have to be spelled out as eight separate branch-protection entries that drift
+# out of step with the workflow set the moment a lane is added or renamed.
+#
+# So this job reads .github/required-checks.txt — the checked-in definition of
+# required — and waits for exactly those check runs on this commit. The owner
+# configures a single required status check, `ci-required`.
+#
+# It fails when a required lane fails, is cancelled, times out, or NEVER RUNS.
+# That last case is the interesting one: a `paths:` filter that quietly grew too
+# narrow, or a renamed job, currently produces a PR with fewer proofs and no
+# signal at all that anything is missing.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+  checks: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci-required:
+    runs-on: ubuntu-latest
+    # The script's own DEADLINE_MINUTES fires first and reports WHICH lane it
+    # was still waiting on.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Every required lane succeeded
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          # On a pull_request event github.sha is the merge commit, which carries
+          # no check runs; the lanes report against the PR head.
+          CHECK_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          DEADLINE_MINUTES: "45"
+        run: bash scripts/ci/require-checks.sh

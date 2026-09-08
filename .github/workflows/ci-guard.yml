@@ -7,7 +7,10 @@ name: ci-guard
 #   2. a workflow hides failures with `continue-on-error: true`
 #      (escape hatch: annotate the line `# ci-guard:allow` for a job the team has
 #       explicitly decided is experimental),
-#   3. search-ci.yml does not invoke the canonical `make ci` gate.
+#   3. search-ci.yml does not invoke the canonical `make ci` gate,
+#   4. .github/required-checks.txt names a job no workflow defines (a rename
+#      would otherwise leave `ci-required` waiting for a check that can never
+#      appear, and the failure would arrive as a timeout an hour later).
 on:
   push:
     branches: [main]
@@ -58,6 +61,24 @@ jobs:
             exit 1
           fi
           echo "OK: no unmarked continue-on-error."
+
+      - name: Every required check name is a job some workflow defines
+        run: |
+          missing=""
+          while IFS= read -r raw; do
+            name=${raw%%#*}
+            name=$(printf '%s' "$name" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s/^?//')
+            [ -n "$name" ] || continue
+            if ! grep -rqE "^[[:space:]]{2}${name}:|name: ${name}\$" .github/workflows; then
+              missing="${missing}${name}"$'\n'
+            fi
+          done < .github/required-checks.txt
+          if [ -n "$missing" ]; then
+            echo "::error::required-checks.txt names checks no workflow defines (renamed or deleted job?):" >&2
+            printf '%s' "$missing" | sed 's/^/  /' >&2
+            exit 1
+          fi
+          echo "OK: every entry in .github/required-checks.txt maps to a defined job."
 
       - name: Search CI runs the canonical gate
         run: |

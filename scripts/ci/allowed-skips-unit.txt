@@ -1,0 +1,8 @@
+# Skips permitted in the DEFAULT build (the canonical `make ci` gate).
+# One extended regex per line, matched against the t.Skip reason.
+# Adding a line here is a reviewed decision: it removes a test from the required
+# gate on any machine where the condition holds. See scripts/ci/assert-no-untagged-skips.sh.
+#
+# EMPTY, and it should stay that way. No test in this repo's default build has
+# any reason to skip: the unit suite runs against in-memory fakes with no
+# external dependency at all.

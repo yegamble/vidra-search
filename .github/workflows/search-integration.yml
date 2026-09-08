@@ -14,6 +14,9 @@ on:
 permissions:
   contents: read
 
+env:
+  GOFLAGS: -mod=readonly
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -53,7 +56,7 @@ jobs:
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26"
+          go-version: "1.27"
           cache: true
           cache-dependency-path: go.sum
 
@@ -72,4 +75,25 @@ jobs:
         env:
           DATABASE_URL: postgres://vidra_search:vidra_search@localhost:5432/vidra_search?sslmode=disable
           REDIS_URL: redis://localhost:6379/0
-        run: make test-integration
+        # GO_TEST_FLAGS=-v so every RUN/PASS/SKIP is on the record. WITHOUT the
+        # audit below this lane could pass having executed nothing: every test
+        # here self-skips on an unset DATABASE_URL/REDIS_URL, so a service that
+        # died after its healthcheck, or a renamed variable, leaves `go test`
+        # exiting 0 with no SQL exercised at all and the check green.
+        run: |
+          mkdir -p ci-report
+          set -o pipefail
+          make test-integration GO_TEST_FLAGS=-v 2>&1 | tee ci-report/integration.log
+
+      - name: No silent skips in the integration suite
+        # Empty allowlist: this lane provides every dependency its tests need.
+        run: bash scripts/ci/assert-no-silent-skips.sh ci-report/integration.log scripts/ci/allowed-skips-integration.txt
+
+      - name: Upload integration test log
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: search-integration-log
+          path: ci-report/
+          retention-days: 14
+          if-no-files-found: warn
