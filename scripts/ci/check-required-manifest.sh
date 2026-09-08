@@ -25,7 +25,16 @@ while IFS= read -r raw; do
   [ -n "$name" ] || continue
   count=$((count + 1))
   base=$(printf '%s' "$name" | sed -E 's/ \(.*\)$//')
-  if grep -rqE "^[[:space:]]{2}${base}:|name: ${base}([[:space:]]|\(|\$)" .github/workflows; then
+  # Either a job id at the two-space indent under `jobs:`, or a job `name:`
+  # whose value — with any parenthesised matrix suffix stripped — equals it
+  # EXACTLY. The exact compare matters: a prefix match would let `build` stand
+  # in for `build-test` and quietly satisfy the guard it exists to be.
+  if grep -rqE "^[[:space:]]{2}${base}:" .github/workflows; then
+    continue
+  fi
+  if grep -rhoE '^[[:space:]]*name: .*' .github/workflows \
+    | sed -E 's/^[[:space:]]*name: //; s/[[:space:]]*$//; s/ \(.*//' \
+    | grep -qxF "$base"; then
     continue
   fi
   missing="${missing}${name}"$'\n'
