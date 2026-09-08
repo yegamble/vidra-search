@@ -1,8 +1,13 @@
 package main
 
 import (
+	"io"
+	"os"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/vidra/vidra-search/internal/dbmigrate"
 )
 
 // TestParseMigrateArgs pins the argv contract of the `migrate` subcommand — in
@@ -20,7 +25,9 @@ func TestParseMigrateArgs(t *testing.T) {
 		{name: "up", args: []string{"up"}, want: migrateCmd{name: "up"}},
 		{name: "version", args: []string{"version"}, want: migrateCmd{name: "version"}},
 		{name: "no command", args: nil, wantErr: true},
-		{name: "unknown command", args: []string{"sideways"}, wantErr: true, errContains: "up|version|force"},
+		{name: "embedded-max", args: []string{"embedded-max"}, want: migrateCmd{name: "embedded-max"}},
+		{name: "unknown command", args: []string{"sideways"}, wantErr: true, errContains: "up|version|embedded-max|force"},
+		{name: "embedded-max takes no arguments", args: []string{"embedded-max", "3"}, wantErr: true},
 		{name: "up takes no arguments", args: []string{"up", "3"}, wantErr: true},
 		{
 			name: "force gated",
@@ -87,5 +94,43 @@ func TestRunMigrateRefusesForceBeforeTouchingTheDatabase(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), forceGateFlag) {
 		t.Fatalf("runMigrate(force 7) error = %q, want the %s refusal (not a config error)", err, forceGateFlag)
+	}
+}
+
+// `migrate embedded-max` is deploy/restore.sh's preflight question and it is
+// asked of an image that may have NO database in front of it. LoadDatabaseURL
+// REFUSES an unset DATABASE_URL, so this proves the answer is produced before
+// that call — and that it is a BARE integer, which restore.sh reads with $(...).
+func TestRunMigrateEmbeddedMaxNeedsNoDatabase(t *testing.T) {
+	t.Setenv("DATABASE_URL", "")
+
+	stdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stdout = w
+	runErr := runMigrate([]string{"embedded-max"})
+	_ = w.Close()
+	os.Stdout = stdout
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("read pipe: %v", err)
+	}
+	if runErr != nil {
+		t.Fatalf("runMigrate([embedded-max]) = %v, want it to answer from the embedded FS alone", runErr)
+	}
+
+	got := strings.TrimSpace(string(out))
+	n, err := strconv.ParseUint(got, 10, 64)
+	if err != nil {
+		t.Fatalf("migrate embedded-max printed %q, want a bare integer: %v", got, err)
+	}
+	want, err := dbmigrate.EmbeddedMax()
+	if err != nil {
+		t.Fatalf("EmbeddedMax: %v", err)
+	}
+	if uint(n) != want {
+		t.Fatalf("migrate embedded-max printed %d, want %d", n, want)
 	}
 }

@@ -1,0 +1,199 @@
+name: rollback-floor
+
+# The OTHER half of the one-release schema-compat policy, and the half that was
+# missing when A38's rehearsal took a lab site down on 2026-09-07.
+#
+# vidra-core's schema-compat.yml proves release N-1's TEST SUITE passes against
+# release N's SCHEMA — i.e. N-1's application code. That was already true; the
+# rehearsal started the v0.6.2 images by hand against search schema 18 and
+# everything worked. What nothing checked is the step `deploy/rollback.sh`
+# actually performs first: `up -d` starts the `search-migrate` one-shot from the
+# PREVIOUS release's image, and THAT binary met a ledger newer than anything it
+# embeds:
+#
+#   dbmigrate: apply migrations: no migration found for version 18:
+#   read down for version 18 .: file does not exist
+#
+# The one-shot exited 1, every service waiting on it with
+# service_completed_successfully never started, and a documented "60-second tag
+# flip that never touches the database" took the whole site down.
+#
+# So this lane runs the previous release's MIGRATOR against this branch's schema.
+# vidra-search has no schema-compat lane of its own, so this is the minimal
+# equivalent: one Postgres, no Redis, no test suite.
+#
+# TWIN: vidra-core .github/workflows/rollback-floor.yml — same three steps
+# over that repo's ledger. Keep them in step.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "migrations/**"
+      - "internal/dbmigrate/**"
+      - "cmd/api/migrate.go"
+      - ".github/workflows/rollback-floor.yml"
+  pull_request:
+    paths:
+      - "migrations/**"
+      - "internal/dbmigrate/**"
+      - "cmd/api/migrate.go"
+      - ".github/workflows/rollback-floor.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Same major production runs (docker-compose.yml pins postgres:18-alpine).
+  DATABASE_URL: postgres://vidra_search:vidra_search@localhost:5432/vidra_search?sslmode=disable
+
+jobs:
+  prev-migrator-against-new-schema:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: vidra_search
+          POSTGRES_PASSWORD: vidra_search
+          POSTGRES_DB: vidra_search
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U vidra_search"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      # Full history + tags: the job has to check out the previous release tag,
+      # which a shallow default clone does not carry.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26"
+          cache: true
+          cache-dependency-path: go.sum
+
+      # The N schema, applied by the N migrator — exactly what a completed
+      # upgrade leaves behind, and what a rollback then rolls back ONTO.
+      - name: Apply HEAD migrations to a fresh database (the N schema)
+        run: go run ./cmd/api migrate up
+
+      - name: Record the resulting ledger
+        id: head
+        run: |
+          set -euo pipefail
+          out="$(go run ./cmd/api migrate version)"
+          echo "HEAD ledger: $out"
+          case "$out" in
+            *dirty=false*) ;;
+            *) echo "::error::HEAD's own migrate up left the ledger dirty: $out" >&2; exit 1 ;;
+          esac
+          version="${out#version=}"; version="${version%% *}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # `sort -V` is GNU coreutils, present on ubuntu-latest runners. Same
+      # resolution as vidra-core's schema-compat.yml, deliberately: core and
+      # search are released together, so both lanes must mean the same N-1.
+      - name: Resolve the previous release tag (N-1)
+        id: prev
+        run: |
+          set -euo pipefail
+          if [ -z "$(git tag -l 'v*')" ]; then
+            git fetch --tags --force origin || true
+          fi
+          prev="$(git tag -l 'v*' | sort -V | tail -1)"
+          if [ -z "$prev" ]; then
+            echo "::error::no v* release tag found — the rollback floor is measured against the previous RELEASE, so this job cannot prove anything without one." >&2
+            exit 1
+          fi
+          echo "previous release tag: $prev ($(git rev-parse --short "$prev"))"
+          echo "tag=$prev" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the previous release into a worktree
+        run: git worktree add ../n-1 "${{ steps.prev.outputs.tag }}"
+
+      # THE PROOF. No `migrate up` from HEAD here — the N-1 tree's own migrator
+      # runs against the schema the step above left behind, which is bit for bit
+      # what `docker compose up -d` does to the `migrate` one-shot during a
+      # rollback.
+      #
+      # Two outcomes are accepted, and which one applies is decided by a
+      # CAPABILITY PROBE rather than a hardcoded version, so this lane flips
+      # itself over the moment a release carries the fix:
+      #
+      #   * N-1 carries LedgerAheadMessage  -> it MUST exit 0, print the no-op
+      #     line, and leave the ledger untouched. This is the assertion.
+      #   * N-1 predates it (v0.6.2 and older) -> it MUST fail in the KNOWN way
+      #     ("no migration found for version N"), which is the breakage the fix
+      #     closes. Recorded as a notice, not a pass-by-silence: a DIFFERENT
+      #     failure here is still a failure, and the ledger must survive it.
+      - name: The previous release's migrator against the new schema
+        working-directory: ${{ github.workspace }}/../n-1
+        run: |
+          set -euo pipefail
+          head_version='${{ steps.head.outputs.version }}'
+
+          # The newest migration N-1 embeds, from its own filenames — the same
+          # computation deploy/deploy.sh does, and the only one available on a
+          # tree that predates `migrate embedded-max`.
+          prev_max="$(ls migrations/*.up.sql | sed 's#.*/##; s/_.*//' | sort -n | tail -1)"
+          prev_max="$((10#$prev_max))"
+          echo "HEAD ledger=$head_version, ${{ steps.prev.outputs.tag }} embeds up to $prev_max"
+
+          if [ "$head_version" -le "$prev_max" ]; then
+            echo "::notice::HEAD adds no migration beyond ${{ steps.prev.outputs.tag }} (ledger $head_version <= embedded $prev_max), so there is nothing AHEAD of the previous migrator to test. This lane proves nothing on this change by design."
+            exit 0
+          fi
+
+          if grep -q 'LedgerAheadMessage' internal/dbmigrate/dbmigrate.go; then
+            echo "${{ steps.prev.outputs.tag }} carries the rollback-floor fix — asserting the no-op."
+            rc=0
+            out="$(go run ./cmd/api migrate up 2>&1)" || rc=$?
+            echo "$out"
+            if [ "$rc" -ne 0 ]; then
+              echo "::error::the previous release's migrator exited $rc against schema $head_version. This is the A38 rollback-floor break: compose up -d would leave api, search and frontend unstarted." >&2
+              exit 1
+            fi
+            case "$out" in
+              *"nothing to apply"*) ;;
+              *) echo "::error::the previous release's migrator exited 0 but did not report the no-op. It may have APPLIED something." >&2; exit 1 ;;
+            esac
+          else
+            echo "::notice::${{ steps.prev.outputs.tag }} predates the rollback-floor fix, so its migrator is expected to FAIL here — that failure is exactly what this lane exists to record, and it becomes a hard assertion as soon as a release carries the fix."
+            rc=0
+            out="$(go run ./cmd/api migrate up 2>&1)" || rc=$?
+            echo "$out"
+            if [ "$rc" -eq 0 ]; then
+              echo "::error::${{ steps.prev.outputs.tag }} has no rollback-floor fix but its migrator SUCCEEDED against schema $head_version — the probe above is wrong, or the tag moved. Fix the probe before trusting this lane." >&2
+              exit 1
+            fi
+            case "$out" in
+              *"no migration found for version"*) ;;
+              *) echo "::error::the previous release's migrator failed in an UNEXPECTED way. Read the output above before assuming this is the known A38 break." >&2; exit 1 ;;
+            esac
+          fi
+
+      # Whichever branch ran, the ledger must be exactly where HEAD's migrator
+      # left it: neither a no-op nor a refusal may move or dirty it. Run from
+      # HEAD, whose `migrate version` is the one this repo maintains.
+      - name: The ledger is unchanged
+        run: |
+          set -euo pipefail
+          out="$(go run ./cmd/api migrate version)"
+          echo "ledger after: $out"
+          want='version=${{ steps.head.outputs.version }} dirty=false table=vidra_search_migrations'
+          if [ "$out" != "$want" ]; then
+            echo "::error::ledger is now '$out', want '$want' — the previous release's migrator moved or dirtied it." >&2
+            exit 1
+          fi
