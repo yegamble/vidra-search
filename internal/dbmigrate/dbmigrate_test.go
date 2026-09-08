@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/vidra/vidra-search/migrations"
@@ -185,5 +187,51 @@ func TestStatusString(t *testing.T) {
 				t.Fatalf("String() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// EmbeddedMax is what `migrate embedded-max` prints and what deploy/restore.sh
+// compares a dump's ledger against, so it must be the real newest migration and
+// not, say, the count of them.
+func TestEmbeddedMaxIsTheNewestMigrationOnDisk(t *testing.T) {
+	upFiles, err := filepath.Glob(filepath.Join(migrationsDir, "*.up.sql"))
+	if err != nil {
+		t.Fatalf("glob up migrations: %v", err)
+	}
+	if len(upFiles) == 0 {
+		t.Fatal("no up migrations found on disk")
+	}
+	var want uint
+	for _, p := range upFiles {
+		prefix, _, ok := strings.Cut(filepath.Base(p), "_")
+		if !ok {
+			t.Fatalf("migration %q has no version prefix", p)
+		}
+		n, err := strconv.ParseUint(prefix, 10, 64)
+		if err != nil {
+			t.Fatalf("migration %q has a non-numeric version prefix: %v", p, err)
+		}
+		if uint(n) > want {
+			want = uint(n)
+		}
+	}
+
+	got, err := EmbeddedMax()
+	if err != nil {
+		t.Fatalf("EmbeddedMax: %v", err)
+	}
+	if got != want {
+		t.Fatalf("EmbeddedMax() = %d, want %d (the newest migrations/*.up.sql)", got, want)
+	}
+}
+
+// TWIN: vidra-core internal/dbmigrate.TestLedgerAheadMessageWording asserts this
+// exact string. The wording is a contract — deploy/rollback.sh's operator and
+// the A38 rehearsal read it to tell "the rollback target no-opped, as designed"
+// apart from "the migrator failed" — so one grep must find BOTH services.
+func TestLedgerAheadMessageWording(t *testing.T) {
+	const want = "schema version 135 is newer than this binary's newest migration 125; nothing to apply"
+	if got := LedgerAheadMessage(135, 125); got != want {
+		t.Fatalf("LedgerAheadMessage(135, 125) = %q, want %q", got, want)
 	}
 }

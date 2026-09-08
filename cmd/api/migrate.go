@@ -35,7 +35,13 @@ type migrateCmd struct {
 //
 //	up                            apply every embedded migration not yet applied (idempotent)
 //	version                       print the ledger version and dirty flag
+//	embedded-max                  print the newest migration compiled into this binary
 //	force <version> --yes-i-know  rewrite the ledger to <version>, clearing dirty
+//
+// embedded-max is the one form that opens NO database, so it answers from a bare
+// `docker run --rm <image> migrate embedded-max` with no environment at all —
+// deploy/restore.sh asks the PINNED image that question before it drops
+// anything, to refuse a dump whose schema the pinned migrator cannot reach.
 //
 // The DSN comes from DATABASE_URL, which is required (no dev fallback: a
 // migrator that quietly migrated the wrong database would be worse than one
@@ -47,6 +53,18 @@ func runMigrate(args []string) error {
 	cmd, err := parseMigrateArgs(args)
 	if err != nil {
 		return err
+	}
+	// Answered before the DSN is resolved: LoadDatabaseURL REFUSES an unset
+	// DATABASE_URL, and this question has nothing to do with a database.
+	// Printed as a BARE integer with nothing else — restore.sh reads it with
+	// $(...) and compares it numerically.
+	if cmd.name == "embedded-max" {
+		max, err := dbmigrate.EmbeddedMax()
+		if err != nil {
+			return err
+		}
+		fmt.Println(max)
+		return nil
 	}
 	dsn, err := config.LoadDatabaseURL()
 	if err != nil {
@@ -88,7 +106,7 @@ func parseMigrateArgs(args []string) (migrateCmd, error) {
 		return migrateCmd{}, fmt.Errorf("migrate: want a command (up|version|force), got none")
 	}
 	switch args[0] {
-	case "up", "version":
+	case "up", "version", "embedded-max":
 		if len(args) != 1 {
 			return migrateCmd{}, fmt.Errorf("migrate %s: takes no arguments, got %d", args[0], len(args)-1)
 		}
@@ -96,7 +114,7 @@ func parseMigrateArgs(args []string) (migrateCmd, error) {
 	case "force":
 		return parseForceArgs(args[1:])
 	default:
-		return migrateCmd{}, fmt.Errorf("migrate: unknown command %q (want: up|version|force)", args[0])
+		return migrateCmd{}, fmt.Errorf("migrate: unknown command %q (want: up|version|embedded-max|force)", args[0])
 	}
 }
 
