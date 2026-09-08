@@ -22,3 +22,6 @@ __pycache__/
 *.pyc
 .pytest_cache/
 *.egg-info/
+
+# A39: CI evidence bundles (uploaded as artifacts, never committed)
+/ci-report/

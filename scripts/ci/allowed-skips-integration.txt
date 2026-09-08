@@ -1,0 +1,8 @@
+# Skips permitted in the `-tags=integration` lane (search-integration.yml).
+# One extended regex per line, matched against the t.Skip reason by
+# scripts/ci/assert-no-silent-skips.sh.
+#
+# EMPTY on purpose. Every self-skip in this repo's integration suite is a
+# `DATABASE_URL`/`REDIS_URL` dependency gate, and the lane provides both — so
+# any skip means a service died or a variable was renamed, and the lane would
+# otherwise pass having exercised no SQL at all.

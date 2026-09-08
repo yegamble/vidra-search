@@ -7,6 +7,39 @@ Conventions mirror vidra-core (Echo, sqlc, golang-migrate); files carrying a
 `TWIN` comment must stay byte-identical with their vidra-core counterpart —
 fix both repos in the same sweep, never just one.
 
+## CI: what "required for merge" means
+
+One check stands for the whole required set: **`ci-required`** — the only name
+that belongs in branch protection for this repo. It reads
+[`.github/required-checks.txt`](.github/required-checks.txt), the checked-in
+definition of required, and fails if any listed lane failed, was cancelled,
+timed out, or **never ran** (a `paths:` filter that grew too narrow, or a
+renamed job, otherwise removes a proof from every PR with no signal at all).
+
+Required: `build-test`, `integration`, `openapi`, plus `guard`,
+`prev-migrator-against-new-schema` and `smoke` (training) when their path
+filters fire. `publish` is release-triggered and not a PR gate.
+
+**No silent skips.** Every integration test here self-skips on an unset
+`DATABASE_URL`/`REDIS_URL` — right on a laptop, wrong in the lane whose job is
+to prove the SQL works, where it means `go test` exits 0 having executed
+nothing. `search-integration` runs verbosely, tees its log, and
+`scripts/ci/assert-no-silent-skips.sh` fails on ANY skip: the allowlist
+(`scripts/ci/allowed-skips-integration.txt`) is deliberately empty because this
+lane provides every dependency. The untagged suite is guarded statically by
+`scripts/ci/assert-no-untagged-skips.sh` — `make ci` runs non-verbosely, where
+a skip prints nothing — and its allowlist is empty too. The training lane
+asserts `skipped="0"` in its JUnit report.
+
+**Toolchain.** CI pins Go to the version the RELEASE IMAGE builds with —
+`golang:1.27-alpine` in the Dockerfile — not merely the minimum `go.mod`
+accepts. `go mod verify` + `go mod tidy -diff` are gates and
+`GOFLAGS=-mod=readonly` is stated in every Go job. Move the workflows when the
+Dockerfile moves.
+
+TWIN: vidra-core carries the same three scripts, the same manifest syntax and
+the same `ci-required` job. Fix both repos in the same sweep.
+
 ## Verification gates (run before opening any PR; paste the output tail into the PR body)
 
 ```

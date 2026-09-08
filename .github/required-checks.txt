@@ -1,0 +1,41 @@
+# The definition of "required for merge" for vidra-search.
+#
+# scripts/ci/require-checks.sh reads this file in the `ci-required` job and
+# fails unless every entry is satisfied for the commit under test. Configure
+# ONE required status check in branch protection — `ci-required` — and this
+# file becomes the single place the required set is declared and reviewed.
+# TWIN: vidra-core .github/required-checks.txt — same syntax, same job.
+#
+# Syntax (one check-run name per line, i.e. a job's name as GitHub reports it):
+#   name    must EXIST for this commit and must conclude `success`
+#   ?name   required only IF it ran (path-filtered lanes)
+#
+# Nothing but `success` passes: `cancelled`, `timed_out`, `neutral` and
+# `skipped` all fail.
+
+# search-ci.yml — the canonical `make ci` gate + exact module manifest.
+build-test
+
+# search-integration.yml — `-tags=integration` against real Postgres + Redis,
+# with the no-silent-skip audit over its verbose log.
+integration
+
+# openapi.yml — spec lint + route/spec drift guard.
+openapi
+
+# ci-guard.yml — action pins, no hidden continue-on-error, search-ci really runs
+# `make ci`, required-checks.txt names only jobs that exist. Path-filtered to
+# .github/workflows/**.
+?guard
+
+# rollback-floor.yml — the PREVIOUS release's migrator against this schema.
+# Path-filtered to migrations/, internal/dbmigrate/ and cmd/api/migrate.go.
+?prev-migrator-against-new-schema
+
+# training-ci.yml — offline LightGBM pipeline on synthetic data, and the
+# feature-order contract with internal/ranking.ModelFeatureNames. Path-filtered
+# to training/**, so required exactly when the pipeline changed.
+?smoke
+
+# NOT required, deliberately:
+#   publish    release-triggered image build, not a PR gate

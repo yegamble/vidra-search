@@ -63,9 +63,16 @@ test-race: ## Run tests with the race detector
 cover: ## Run tests with coverage summary
 	go test -cover ./...
 
+# Extra `go test` flags for the integration target. CI passes GO_TEST_FLAGS=-v so
+# the run names every RUN/PASS/SKIP and scripts/ci/assert-no-silent-skips.sh can
+# prove no test self-skipped its way to a false green (A39). Empty locally, so
+# `make test-integration` behaves exactly as it always did.
+# TWIN: vidra-core Makefile — keep them in step.
+GO_TEST_FLAGS ?=
+
 .PHONY: test-integration
 test-integration: ## Run integration tests (-tags=integration); needs DATABASE_URL + REDIS_URL — each test self-skips if unset
-	go test -tags=integration -race ./...
+	go test -tags=integration -race $(GO_TEST_FLAGS) ./...
 
 .PHONY: build
 build: ## Build the api binary into ./bin (injects version metadata)
