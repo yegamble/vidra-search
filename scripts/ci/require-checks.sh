@@ -19,7 +19,9 @@
 #   * a lane that concludes `cancelled`, `timed_out`, `neutral` or `skipped`
 #     being read as "not failed" — only `success` passes here;
 #   * branch protection drifting behind the workflow set — the manifest is the
-#     single place both are declared.
+#     single place both are declared;
+#   * a workflow FILE GitHub rejects — a run with zero jobs produces no
+#     check-run, so a `?name` lane would otherwise vanish without a trace.
 #
 # It deliberately does NOT create or modify branch protection. The owner
 # configures exactly one required check, `ci-required`, per repo.
@@ -50,6 +52,29 @@ while :; do
   runs=$(gh api --paginate -H "Accept: application/vnd.github+json" \
     "repos/${repo}/commits/${sha}/check-runs?per_page=100" \
     --jq '.check_runs[] | [.name, .status, (.conclusion // "")] | @tsv' 2>/dev/null || true)
+
+  # --- a run GitHub could not even start ---------------------------------------
+  # A workflow whose FILE GitHub rejects (a duplicated key, an action ref that
+  # does not resolve) still produces a run: conclusion "failure", zero jobs —
+  # and, the part that matters here, no check-run at all. The loop above reads
+  # check-runs, so it cannot see it, and a `?name` lane simply vanishes from
+  # the manifest's point of view. vidra-search's rollback-floor.yml failed
+  # exactly like this on every push from 2026-09-08 to 2026-09-10 with this
+  # gate green. Zero jobs plus "failure" has no other meaning, so it fails here
+  # by name, whether or not the manifest lists the lane.
+  empty_failures=$(gh api --paginate -H "Accept: application/vnd.github+json" \
+    "repos/${repo}/actions/runs?head_sha=${sha}&per_page=100" \
+    --jq '.workflow_runs[] | select(.conclusion == "failure") | [.id, .path] | @tsv' 2>/dev/null || true)
+  while IFS=$'\t' read -r run_id wf_path; do
+    [ -n "$run_id" ] || continue
+    jobs=$(gh api "repos/${repo}/actions/runs/${run_id}/jobs?per_page=1" --jq '.total_count' 2>/dev/null || echo "?")
+    if [ "$jobs" = "0" ]; then
+      echo "::error::ci-required: GitHub rejected the workflow file ${wf_path} (run ${run_id} failed with zero jobs — a duplicated key, or an action that does not resolve). Nothing that file defines can run for ${sha}." >&2
+      exit 1
+    fi
+  done <<EOM
+$empty_failures
+EOM
 
   pending=""
   missing=""
