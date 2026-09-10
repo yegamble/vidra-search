@@ -16,9 +16,11 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/**"
+      - "scripts/ci/**"
   pull_request:
     paths:
       - ".github/workflows/**"
+      - "scripts/ci/**"
   workflow_dispatch:
 
 permissions:
@@ -36,6 +38,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Workflow files parse the way GitHub parses them
+        run: python3 scripts/ci/check-workflow-yaml.py
 
       - name: External actions use immutable commit pins
         run: |

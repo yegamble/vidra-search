@@ -42,14 +42,12 @@ on:
 permissions:
   contents: read
 
-env:
-  GOFLAGS: -mod=readonly
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
+  GOFLAGS: -mod=readonly
   # Same major production runs (docker-compose.yml pins postgres:18-alpine).
   DATABASE_URL: postgres://vidra_search:vidra_search@localhost:5432/vidra_search?sslmode=disable
 
