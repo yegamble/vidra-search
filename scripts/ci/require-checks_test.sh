@@ -18,7 +18,9 @@
 # several JSON documents, one per page: with `--paginate` the filter runs over
 # every page, without it only the first page is seen, as with the real gh.
 # `<kind>.<n>` answers only the n-th call of a kind, `<kind>` every other one;
-# a matching `.rc` file sets the exit code (with an HTTP-ish error on stderr).
+# a matching `.rc` file sets the exit code (with an HTTP-ish error on stderr),
+# and `<kind>.pages` stops output after that many pages, like a paginated read
+# that dies part way.
 #
 # Needs bash (3.2 is enough) and jq. Nothing here skips: a missing tool fails.
 #
@@ -69,11 +71,12 @@ if [ "$n" -gt 20 ]; then
   exit 97
 fi
 body=$FX/$kind.$n; [ -e "$body" ] || body=$FX/$kind
+pages=1000000; [ -e "$FX/$kind.pages" ] && pages=$(cat "$FX/$kind.pages")
 rc=0
 if [ -e "$FX/$kind.$n.rc" ]; then rc=$(cat "$FX/$kind.$n.rc"); elif [ -e "$FX/$kind.rc" ]; then rc=$(cat "$FX/$kind.rc"); fi
 if [ -e "$body" ]; then
   if [ "$paginate" -eq 1 ]; then
-    jq -r "$expr" "$body" || exit 98
+    jq -r -n "limit($pages; inputs) | ($expr)" "$body" || exit 98
   else
     jq -r -n "input | ($expr)" "$body" || exit 98
   fi
@@ -114,11 +117,12 @@ checks() {
     | {total_count: length, check_runs: .}' >>"$FX/checks"
 }
 
-# runs ROW... replaces the workflow-runs list. ROW: id|suite|path|conclusion
+# runs ROW... replaces the workflow-runs list. ROW: id|suite|path|conclusion[|status]
+# (an empty conclusion means the run is still going: `in_progress` unless given)
 runs() {
   printf '%s\n' "$@" | jq -Rn '[inputs | select(length > 0) | split("|") | {
-      id: (.[0] | tonumber), check_suite_id: (.[1] | tonumber), path: .[2],
-      status: (if .[3] == "" then "in_progress" else "completed" end),
+      id: (.[0] | tonumber), check_suite_id: (.[1] | tonumber), path: .[2], run_attempt: 1,
+      status: (if .[3] != "" then "completed" else (.[4] // "in_progress") end),
       conclusion: (if .[3] == "" then null else .[3] end)}]
     | {total_count: length, workflow_runs: .}' >"$FX/runs"
 }
@@ -127,6 +131,7 @@ runs() {
 jobcount() { printf '{"total_count":%s,"jobs":[]}\n' "$2" >"$FX/jobs-$1"; }
 
 # fail KIND [N]: the N-th call of KIND (every call without N) exits 1.
+# (`echo P >"$FX/KIND.pages"` makes it print only the first P pages first.)
 fail() { echo 1 >"$FX/$1${2:+.$2}.rc"; }
 
 record() {
@@ -221,6 +226,13 @@ jobcount 3 4
 checks "100|10|a|completed|success"
 expect 0 'OK: every required check'
 
+begin "a finished run's job count is read once, not on every poll"
+runs "1|10|$A|" "3|30|$UNLISTED|failure"
+jobcount 3 4
+checks "100|10|a|in_progress|"
+expect 1 'still running' DEADLINE_MINUTES=5 MAX_POLLS=3
+expect_calls jobs-3 1
+
 # --- an API read that fails decides nothing ----------------------------------
 begin "the jobs-count read failing does not pass"
 runs "1|10|$A|success" "3|30|$UNLISTED|failure"
@@ -234,7 +246,11 @@ checks "100|10|a|completed|success"
 expect 1 'GitHub API unavailable'
 
 begin "a paginated read that dies after page one does not pass"
+runs "1|10|$A|success" "4|11|$A|failure"
+jobcount 4 3
 checks "100|10|a|completed|success"
+checks "101|11|a|completed|failure"
+echo 1 >"$FX/checks.pages"
 fail checks
 expect 1 'GitHub API unavailable'
 
@@ -256,7 +272,7 @@ jobcount 4 3
 checks "100|10|a|completed|success" "101|11|a|completed|failure"
 expect 1 'a -> failure'
 
-begin "one lane twice, older failure and newer success (a re-run), passes"
+begin "one lane twice, older failure and newer success (a later run), passes"
 runs "1|10|$A|failure" "4|11|$A|success"
 jobcount 1 3
 checks "100|10|a|completed|failure" "101|11|a|completed|success"
@@ -271,6 +287,29 @@ begin "one lane twice, the older still running, still waits"
 runs "1|10|$A|" "4|11|$A|success"
 checks "100|10|a|in_progress|" "101|11|a|completed|success"
 expect 1 'still running'
+
+begin "a re-run attempt of an older run does not supersede a newer run's failure"
+runs "1|10|$A|success" "4|11|$A|failure"
+jobcount 4 3
+checks "150|10|a|completed|success" "101|11|a|completed|failure"
+expect 1 'a -> failure'
+
+begin "a newer run of the lane's file still queued waits"
+runs "1|10|$A|failure" "4|11|$A||queued"
+jobcount 1 3
+checks "100|10|a|completed|failure"
+expect 1 'still running'
+
+begin "a lane that finished while other jobs of its run still run is decided"
+runs "1|10|$A|"
+checks "100|10|a|completed|success"
+expect 0 'OK: every required check'
+
+begin "a newer run of the file that ended without the lane does not hide the older result"
+runs "1|10|$A|failure" "4|11|$A|cancelled"
+jobcount 1 3
+checks "100|10|a|completed|failure"
+expect 1 'a -> failure'
 
 begin "one name in two workflow files needs both files to succeed"
 runs "1|10|$A|failure" "5|50|$OTHER|success"
