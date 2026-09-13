@@ -1,0 +1,57 @@
+name: docker-build
+
+# Builds the production Dockerfile the way publish-container.yml does — same
+# action, same pin, same `no-cache-filters` — WITHOUT pushing, on every change
+# to the Dockerfile or to that workflow. Until this lane existed nothing in CI
+# built the Dockerfile: search-ci tests the Go tree, the compose files build a
+# local image only on an operator's machine, and the first time GitHub
+# compiled a Dockerfile edit was the release publish itself — so a bad apk
+# command or a stage rename that orphans a COPY --from surfaced as a failed
+# RELEASE, not a failed PR.
+#
+# No cache on purpose: a fresh runner builds every layer, so a green run means
+# the Dockerfile builds from nothing today, not that some earlier layer was
+# replayed. Path-filtered, so it is listed as `?docker-build` in
+# .github/required-checks.txt (required exactly when it ran).
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Dockerfile"
+      - ".github/workflows/publish-container.yml"
+      - ".github/workflows/docker-build.yml"
+  pull_request:
+    paths:
+      - "Dockerfile"
+      - ".github/workflows/publish-container.yml"
+      - ".github/workflows/docker-build.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docker-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Build the production image (linux/amd64, no push)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          # Same filter as the release, so the stage-name guard in
+          # scripts/ci/check-workflow-yaml.py covers this lane too.
+          no-cache-filters: runtime

@@ -10,7 +10,10 @@ name: ci-guard
 #   3. search-ci.yml does not invoke the canonical `make ci` gate,
 #   4. .github/required-checks.txt names a job no workflow defines (a rename
 #      would otherwise leave `ci-required` waiting for a check that can never
-#      appear, and the failure would arrive as a timeout an hour later).
+#      appear, and the failure would arrive as a timeout an hour later),
+#   5. a docker/build-push-action `no-cache-filters` names a stage its Dockerfile
+#      does not define (buildkit ignores that silently, and the release would
+#      replay the cached `apk upgrade` layer the filter exists to prevent).
 on:
   push:
     branches: [main]
@@ -39,7 +42,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Workflow files parse the way GitHub parses them
+      - name: Workflow files parse the way GitHub parses them; no-cache-filters name real stages
         run: python3 scripts/ci/check-workflow-yaml.py
 
       - name: External actions use immutable commit pins
