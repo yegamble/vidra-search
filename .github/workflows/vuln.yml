@@ -1,0 +1,110 @@
+name: vuln
+
+# Known-vulnerability gate for the Go module (QLT-01 / REL-01 security facet).
+# Until this lane, no workflow in any vidra repo asked whether shipped code
+# reaches a published Go vulnerability; a release could only be called "scanned"
+# on the strength of a one-off local run.
+#
+# SCOPE — what a green run says, exactly. `make vuln` runs govulncheck at a
+# pinned version. It FAILS when this module's code can reach a vulnerable
+# symbol in an advisory curated by vuln.go.dev (govulncheck exits 3; make
+# reports 2), and when the scan cannot run at all — an unreachable
+# vulnerability database is not a clean scan. Everything else is informational:
+# module-level "required but not called" findings are printed by -show verbose
+# and do not fail the lane, and an advisory that exists only as a GitHub GHSA
+# with no vuln.go.dev entry is invisible to govulncheck by construction
+# (vidra-core's grpc v1.83.1 sat inside GHSA-2v4p-qf9q-27wj's range with this
+# lane green). GHSA-only advisories are Dependabot alerts' job, not this
+# lane's. Green means "no reachable vuln.go.dev advisory", never "no known
+# vulnerability".
+#
+# Triggers:
+#   pull_request / push — a change must not introduce a reachable vulnerability;
+#   schedule            — vulnerabilities are published against code nobody is
+#                         touching, so main is re-scanned daily with no commit.
+#                         A red scheduled run opens or updates ONE tracking
+#                         issue (last step): nothing else surfaces it.
+#
+# Toolchain: the RELEASE IMAGE's Go line (Dockerfile: golang:1.27-alpine), since
+# standard-library findings depend on the toolchain doing the scan. check-latest
+# makes that the newest 1.27 patch rather than whatever the runner cached. This
+# scans SOURCE on it; a published image built on an older patch is
+# release qualification's job (a binary scan of the pinned image), not this one.
+#
+# TWIN: vidra-core and vidra-search carry the same workflow. Keep in step.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "41 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GOFLAGS: -mod=readonly
+
+# The event is part of the group: the daily scheduled run lands on main's head
+# commit, and must never cancel that same commit's push run — a `cancelled`
+# check-run fails ci-required.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  govulncheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # issues: write exists for the last step alone — the tracking issue a red
+    # SCHEDULED run opens. A job-level block replaces the workflow-level one
+    # wholesale, so contents: read is restated for the checkout.
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27"
+          check-latest: true
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Scan reachable code for known vulnerabilities
+        run: |
+          go version
+          make vuln
+
+      # A red scheduled run has no PR to be red on: GitHub emails whoever last
+      # edited the cron line, and nothing else changes. So it opens ONE tracking
+      # issue, found again by its fixed title on later red runs and commented
+      # on rather than duplicated. PR and push runs skip this: their red is
+      # already on the PR or the commit.
+      - name: Open or update the tracking issue for a red scheduled run
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: "govulncheck: the scheduled scan of main is red"
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SHA: ${{ github.sha }}
+        run: |
+          body="The daily govulncheck scan of \`main\` failed.
+
+          - run: ${RUN_URL}
+          - commit: ${SHA}
+
+          The run log names the finding. The fix is the smallest upgrade of the named module or of the Go toolchain (AGENTS.md); never narrow or skip the scan. Close this issue once a scheduled run on main is green again."
+          number=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --search "\"$TITLE\" in:title" --json number,title \
+            --jq 'map(select(.title == env.TITLE)) | .[0].number // empty')
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --repo "$GITHUB_REPOSITORY" --body "$body"
+            echo "commented on tracking issue #$number"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$body"
+          fi
