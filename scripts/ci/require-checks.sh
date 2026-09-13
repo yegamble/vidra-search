@@ -93,31 +93,62 @@ fetch() {
 #   1. only check-runs created by GitHub Actions count — another app's check
 #      that happens to share a lane's name proves nothing about that lane;
 #   2. if ANY of them is not completed, wait — the lane is still being decided;
-#   3. group them by the workflow FILE that ran them (check suite -> run path);
-#      within one file the NEWEST check-run (highest id) decides, so a later
-#      run of the same file supersedes an older failure, and a run cancelled
-#      by a newer one does not block it;
-#   4. every file's newest must succeed. Two different files defining the same
-#      job name are two proofs, and a newer success in one must not hide a
+#   3. group them by the workflow FILE that ran them (check suite -> run path).
+#      Within one file the NEWEST WORKFLOW RUN decides (highest run id), not
+#      the newest check-run: re-running an OLDER, superseded run mints a newer
+#      check-run id inside that old run's suite, and it must not beat the newer
+#      run's failure. Walking the file's runs newest first, the first run that
+#      carries this check-run OR is not completed decides. A newer run still
+#      queued or running with no check-run for the lane yet means wait — the
+#      old result is not the answer, the new job may be about to fail. A
+#      completed run without the lane (cancelled before its jobs existed) is
+#      passed over. So a later run supersedes an older failure, a run cancelled
+#      by a newer one does not block it, and a lane that finished while other
+#      jobs of its run are still going is decided now;
+#   4. every file's deciding run must succeed. Two different files defining the
+#      same job name are two proofs, and a success in one must not hide a
 #      failure in the other. A check-run whose workflow run is not listed is
 #      its own group — stricter, never looser.
-# decide NAME prints "missing", "pending <status>", "success" or
+# decide NAME prints "missing", "pending <why>", "success" or
 # "failed <conclusion> (<file>)[; ...]". Anything else is treated as a failure.
 decide() {
   LANE=$1 awk -F'\t' '
-    FILENAME == ARGV[1] { if ($2 != "") file[$2] = $3; next }
+    FILENAME == ARGV[1] {
+      if ($2 == "") next
+      file[$2] = $3; run[$2] = $1 + 0; status[$2] = $4
+      runs_of[$3]++; suite_of[$3, runs_of[$3]] = $2
+      next
+    }
     $3 != ENVIRON["LANE"] { next }
     {
       seen = 1
       if ($4 != "completed") waiting = ($4 == "" ? "unknown status" : $4)
-      key = ($2 in file) ? file[$2] : "check suite " $2
-      if (!(key in newest) || $1 + 0 > newest[key] + 0) { newest[key] = $1; state[key] = $5 }
+      if ($2 in file) {
+        files[file[$2]] = 1
+        if (!($2 in check) || $1 + 0 > check[$2] + 0) { check[$2] = $1; state[$2] = $5 }
+      } else {
+        key = "check suite " $2
+        if (!(key in orphan) || $1 + 0 > orphan[key] + 0) { orphan[key] = $1; orphan_state[key] = $5 }
+      }
     }
     END {
       if (!seen) { print "missing"; exit }
       if (waiting != "") { print "pending " waiting; exit }
       bad = ""
-      for (key in newest) if (state[key] != "success") bad = bad (bad == "" ? "" : "; ") state[key] " (" key ")"
+      for (f in files) {
+        pick = ""
+        for (i = 1; i <= runs_of[f]; i++) {
+          s = suite_of[f, i]
+          if (!(s in check) && status[s] == "completed") continue
+          if (pick == "" || run[s] > run[pick]) pick = s
+        }
+        if (!(pick in check)) {
+          print "pending newer run " run[pick] " of " f " is " (status[pick] == "" ? "not completed" : status[pick]) ", no check-run for this lane yet"
+          exit
+        }
+        if (state[pick] != "success") bad = bad (bad == "" ? "" : "; ") state[pick] " (" f ")"
+      }
+      for (key in orphan) if (orphan_state[key] != "success") bad = bad (bad == "" ? "" : "; ") orphan_state[key] " (" key ")"
       print (bad == "" ? "success" : "failed " bad)
     }' <(printf '%s\n' "$workflow_runs") <(printf '%s\n' "$check_runs")
 }
@@ -137,7 +168,7 @@ poll() {
     || return 1
   check_runs=$fetched
   fetch "repos/${repo}/actions/runs?head_sha=${sha}&per_page=100" --paginate \
-    --jq '.workflow_runs[] | [.id, .check_suite_id, .path, (.conclusion // "")] | @tsv' \
+    --jq '.workflow_runs[] | [.id, .check_suite_id, .path, .status, (.conclusion // ""), .run_attempt] | @tsv' \
     || return 1
   workflow_runs=$fetched
 
@@ -150,9 +181,14 @@ poll() {
   # push from 2026-09-08 to 2026-09-10 with this gate green. Zero jobs plus a
   # failed conclusion has no other meaning, so it fails here by name, whether
   # or not the manifest lists the lane.
-  local run_id wf_path concl entry optional name verdict
-  while IFS=$'\t' read -r run_id _ wf_path concl; do
+  #
+  # A finished attempt's job count cannot change (a re-run is a new attempt, so
+  # the attempt is part of the key), so each is read once, not on every poll —
+  # otherwise every failed run on a busy commit costs a call per poll.
+  local run_id wf_path concl attempt entry optional name verdict
+  while IFS=$'\t' read -r run_id _ wf_path _ concl attempt; do
     case $concl in failure|startup_failure) ;; *) continue ;; esac
+    case $jobs_known in *" ${run_id}.${attempt} "*) continue ;; esac
     fetch "repos/${repo}/actions/runs/${run_id}/jobs?per_page=1" --jq '.total_count' || return 1
     case $fetched in
       0)
@@ -161,6 +197,7 @@ poll() {
       ''|*[!0-9]*)
         api_error="jobs of run ${run_id}: expected a job count, got '${fetched}'"
         return 1 ;;
+      *) jobs_known="${jobs_known}${run_id}.${attempt} " ;;
     esac
   done <<EOM
 $workflow_runs
@@ -193,6 +230,7 @@ EOM
 deadline=$(( $(date +%s) + deadline_min * 60 ))
 polls=0
 api_failures=0
+jobs_known=" "
 
 while :; do
   polls=$((polls + 1))
