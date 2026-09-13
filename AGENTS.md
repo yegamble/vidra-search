@@ -19,6 +19,10 @@ renamed job, otherwise removes a proof from every PR with no signal at all).
 Required: `build-test`, `integration`, `openapi`, plus `guard`,
 `prev-migrator-against-new-schema` and `smoke` (training) when their path
 filters fire. `publish` is release-triggered and not a PR gate.
+Removing an entry from the manifest fails `ci-guard`
+(`scripts/ci/check-required-manifest-removals.sh`, compared against the base
+branch) unless the same file carries `# retired: <name> — <reason>` for it:
+retiring a lane is a deliberate, diff-visible act, never a quiet deletion.
 
 **No silent skips.** Every integration test here self-skips on an unset
 `DATABASE_URL`/`REDIS_URL` — right on a laptop, wrong in the lane whose job is
