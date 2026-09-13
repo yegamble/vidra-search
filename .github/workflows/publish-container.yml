@@ -24,6 +24,10 @@ concurrency:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  # The lowest Alpine libssl3/libcrypto3 the pushed image may carry — asserted
+  # on the pushed digest by "Assert the pushed image carries the OpenSSL floor"
+  # below. When the next OpenSSL fix lands in v3.24 main, bump this one line.
+  OPENSSL_MIN_APK_VERSION: 3.5.8-r0
 
 jobs:
   publish:
@@ -73,10 +77,12 @@ jobs:
       #
       # BUILD_DATE is the tag commit's own date rather than the release's
       # published_at: it is defined for BOTH triggers, it is stable for a given
-      # tag (so a re-publish still hits the gha cache and produces the same
-      # image), and it is the same value whichever trigger got here. Its format
-      # matches the Makefile's BUILD_DATE (UTC, %Y-%m-%dT%H:%M:%SZ) so /version
-      # reads identically for a local and a released build.
+      # tag (so a re-publish still hits the gha cache for the build stages),
+      # and it is the same value whichever trigger got here. It does NOT make a
+      # re-publish reproduce the same image: the runtime stage is rebuilt from
+      # the current Alpine index on every publish (no-cache-filters below). Its
+      # format matches the Makefile's BUILD_DATE (UTC, %Y-%m-%dT%H:%M:%SZ) so
+      # /version reads identically for a local and a released build.
       #
       # Each git command is its own statement: a command substitution inside
       # `echo` is NOT checked by `set -e`, so a failing rev-parse would have
@@ -124,7 +130,13 @@ jobs:
           # which makes "which build is running?" unanswerable during an
           # incident. All three derive from the resolved tag and the commit it
           # points at, so a release and a workflow_dispatch re-publish of that
-          # same tag produce identical images.
+          # same tag bake identical version metadata. The IMAGES are not
+          # identical: the runtime stage is rebuilt from the current Alpine
+          # index on every publish (no-cache-filters below), so a re-publish
+          # can move the tag's digest, and the release record that names the
+          # old one (the meta repo's docs/releases/<tag>-*.md and its
+          # docs/evidence manifest) must be re-verified against the digest
+          # this run records.
           build-args: |
             VERSION=${{ steps.tag.outputs.tag }}
             COMMIT=${{ steps.buildinfo.outputs.commit }}
@@ -134,7 +146,78 @@ jobs:
           # Always rebuild the shipped stage: its `apk upgrade` layer is keyed on
           # an unchanged base digest and command, so the GHA cache would replay
           # yesterday's package set into a release. Build stages stay cached.
+          # The name must match `FROM … AS` in the Dockerfile: buildkit ignores a
+          # filter that names no stage without a word, which would quietly bring
+          # the replay back (scripts/ci/check-workflow-yaml.py guards the pair).
           no-cache-filters: runtime
+
+      # A re-publish of an already-released tag can MOVE that tag's digest: the
+      # runtime stage is rebuilt from the current Alpine index every publish
+      # (no-cache-filters above), and nothing else records which digest a given
+      # run created. The meta repo's docs/releases/<tag>-*.md record and its
+      # docs/evidence manifest name the digest of the publish they verified, so
+      # after a re-publish they name an image that is no longer under the tag.
+      # Write this run's digest to the job summary so there is a record to
+      # re-verify against. This runs BEFORE the assertion below on purpose: if
+      # that assertion fails, the image is already pushed under the tag, and
+      # this line is what says which digest to pull, inspect or delete.
+      - name: Record the pushed digest
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        run: |
+          set -eu
+          if [ -z "${DIGEST}" ]; then
+            echo "::error::build-push-action reported no digest, so nothing is known to be pushed under ${TAG}"
+            exit 1
+          fi
+          echo "pushed ${IMAGE}:${TAG} as ${IMAGE}@${DIGEST}"
+          {
+            echo "## Published image"
+            echo
+            echo "| tag | digest |"
+            echo "| --- | --- |"
+            echo "| \`${TAG}\` | \`${DIGEST}\` |"
+            echo
+            echo "\`${IMAGE}@${DIGEST}\` — a re-publish of this tag rebuilds the runtime stage and can produce a different digest; re-verify any release record that names one."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The point of `apk upgrade` + no-cache-filters is that the pushed image
+      # carries the fixed OpenSSL, and NOTHING else checks that: a replayed
+      # layer (a stage rename that defeats the filter, a cache backend that
+      # ignores it) would ship the old libssl3 with a green run and a valid
+      # attestation. So pull the image that was just pushed — by digest, the
+      # exact bytes attest signs next — and refuse to attest one whose
+      # libssl3/libcrypto3 sit below the floor. The floor is ONE env var
+      # (OPENSSL_MIN_APK_VERSION, top of this file); the next OpenSSL fix is a
+      # one-line bump. A failure here leaves the image pushed under the tag but
+      # unattested — the digest recorded above is the one to remove or replace.
+      - name: Assert the pushed image carries the OpenSSL floor
+        env:
+          IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.push.outputs.digest }}
+        run: |
+          set -eu
+          # `--user 0`: the image runs as an unprivileged user; apk happens to read
+          # the installed db as anyone, but the check should not depend on that.
+          # Any "opening from cache … APKINDEX" warning apk prints is about the
+          # package index the image does not carry (--no-cache), not this db.
+          installed=$(docker run --rm --user 0 --entrypoint sh "${IMAGE_REF}" -c 'apk info -v')
+          for pkg in libssl3 libcrypto3; do
+            have=$(printf '%s\n' "${installed}" | sed -n "s/^${pkg}-\([0-9].*\)$/\1/p")
+            if [ -z "${have}" ]; then
+              echo "::error::${pkg} is not installed in ${IMAGE_REF}; the floor cannot be met by absence"
+              exit 1
+            fi
+            # GNU sort -V orders Alpine versions (3.5.10-r0 > 3.5.8-r0 > 3.5.7-r1):
+            # the lowest of {floor, installed} must be the floor itself.
+            lowest=$(printf '%s\n%s\n' "${OPENSSL_MIN_APK_VERSION}" "${have}" | sort -V | head -n1)
+            if [ "${lowest}" != "${OPENSSL_MIN_APK_VERSION}" ]; then
+              echo "::error::${pkg} ${have} in the pushed image is below the floor ${OPENSSL_MIN_APK_VERSION}: the apk upgrade layer was replayed or the Alpine index regressed — do not attest this digest"
+              exit 1
+            fi
+            echo "OK: ${pkg} ${have} >= ${OPENSSL_MIN_APK_VERSION}"
+          done
 
       - name: Attest build provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
