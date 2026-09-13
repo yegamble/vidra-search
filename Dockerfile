@@ -51,8 +51,11 @@ FROM alpine:3.24 AS runtime
 # at build time, so two builds of one commit can differ in patch-level
 # packages. A cached layer for this RUN would silently re-ship an OLDER package
 # set — neither the base digest nor this line changes when a fix lands — so
-# publish-container.yml rebuilds this stage with no-cache-filters. Nothing scans
-# the pushed digest yet; release qualification has to.
+# publish-container.yml rebuilds this stage with no-cache-filters and then
+# asserts libssl3/libcrypto3 on the pushed digest (OPENSSL_MIN_APK_VERSION);
+# a full image scan is still release qualification's job. A local
+# `docker compose build` replays this layer from the daemon's cache — pass
+# `--no-cache` when refreshing packages.
 RUN apk upgrade --no-cache && \
     apk add --no-cache ca-certificates wget && adduser -D -u 10001 vidra
 
