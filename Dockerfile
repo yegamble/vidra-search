@@ -39,7 +39,21 @@ RUN set -eu; \
 
 # ---- runtime stage ----
 FROM alpine:3.24
-RUN apk add --no-cache ca-certificates wget && adduser -D -u 10001 vidra
+# `apk upgrade` FIRST: the base image lags the package repository. Official
+# alpine:3.24 is rebuilt for Alpine point releases, not for each package fix,
+# and `apk add` never upgrades a package the base already carries — so a plain
+# rebuild re-ships the base's copy. v0.6.4 shipped libssl3/libcrypto3 3.5.7-r0
+# (ten OpenSSL CVEs, CVSS up to 9.8) while 3.5.8-r0 was already in v3.24 main.
+# Exposure here is low — the static Go binary does its own TLS and never
+# loads it; apk and wget's https path do — but a scanner cannot tell, and an
+# advisory against the image is a real finding for every operator who scans.
+# Trade-off, stated honestly: the image now takes whatever v3.24 main serves
+# at build time, so two builds of one commit can differ in patch-level
+# packages; the scan of the pushed digest is the record of what shipped. A
+# builder that reuses a cached layer for this RUN (e.g. publish-container's
+# GHA cache, same base digest) also reuses its package set.
+RUN apk upgrade --no-cache && \
+    apk add --no-cache ca-certificates wget && adduser -D -u 10001 vidra
 
 USER vidra
 WORKDIR /app
