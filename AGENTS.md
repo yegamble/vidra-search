@@ -22,12 +22,19 @@ filters fire. `publish` is release-triggered and not a PR gate.
 
 **`govulncheck` can go red with no change in this repo.** `vuln.yml` runs
 `make vuln` (govulncheck, pinned) on every PR, on main and daily, on the release
-image's Go line: it fails when this module's code reaches a known Go
-vulnerability, and when the scan cannot run. The fix is upgrading the named
-module or the Go toolchain — the one exception to "Dependabot owns bumps"
-below. Never skip or narrow the scan to get green. A red DAILY run on main
-blocks nothing by itself and emails only whoever last edited the cron line —
-whoever sees it opens the fix PR.
+image's Go line. Its scope is exact: it fails when this module's code REACHES a
+vulnerable symbol in an advisory curated by vuln.go.dev, and when the scan
+cannot run. Module-level "required but not called" findings are printed
+(`-show verbose`) but informational, and an advisory that exists only as a
+GitHub GHSA is invisible to it — those are Dependabot alerts' job. Green means
+"no reachable vuln.go.dev advisory", not "no known vulnerability". The fix is
+upgrading the named module or the Go toolchain — the one exception to
+"Dependabot owns bumps" below. Never skip or narrow the scan to get green. The
+scanner pin (`GOVULNCHECK_VERSION` in the Makefile) is one Dependabot cannot
+see; review it whenever you touch the lane. A red DAILY run on main blocks
+nothing by itself; it opens (or comments on) one tracking issue titled
+"govulncheck: the scheduled scan of main is red" — whoever picks it up opens
+the fix PR and closes the issue when main is green.
 
 **No silent skips.** Every integration test here self-skips on an unset
 `DATABASE_URL`/`REDIS_URL` — right on a laptop, wrong in the lane whose job is
