@@ -11,13 +11,16 @@ name: ci-guard
 #   4. .github/required-checks.txt names a job no workflow defines (a rename
 #      would otherwise leave `ci-required` waiting for a check that can never
 #      appear, and the failure would arrive as a timeout an hour later),
-#   5. the `ci-required` fan-in (scripts/ci/require-checks.sh) passes a commit
+#   5. a docker/build-push-action `no-cache-filters` names a stage its Dockerfile
+#      does not define (buildkit ignores that silently, and the release would
+#      replay the cached `apk upgrade` layer the filter exists to prevent).
+#   6. the `ci-required` fan-in (scripts/ci/require-checks.sh) passes a commit
 #      its regression suite says it must not,
-#   6. .github/required-checks.txt drops an entry the base branch requires
+#   7. .github/required-checks.txt drops an entry the base branch requires
 #      without a `# retired: <name> — <reason>` tombstone in the same file
 #      (which is why that file is in the path filter below: it defines
 #      "required", and a PR that only edits it ran no guard at all),
-#   7. a script under scripts/ci does not pass `bash -n` and `shellcheck -x`.
+#   8. a script under scripts/ci does not pass `bash -n` and `shellcheck -x`.
 on:
   push:
     branches: [main]
@@ -56,7 +59,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Workflow files parse the way GitHub parses them
+      - name: Workflow files parse the way GitHub parses them; no-cache-filters name real stages
         run: python3 scripts/ci/check-workflow-yaml.py
 
       # Everything under scripts/ci is what the steps below and ci-required
