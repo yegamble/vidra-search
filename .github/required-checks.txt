@@ -28,6 +28,11 @@ openapi
 # .github/workflows/**.
 ?guard
 
+# docker-build.yml — the production Dockerfile builds (linux/amd64, no push)
+# the way the release builds it. Path-filtered to Dockerfile and
+# publish-container.yml: the two files that can break it.
+?docker-build
+
 # rollback-floor.yml — the PREVIOUS release's migrator against this schema.
 # Path-filtered to migrations/, internal/dbmigrate/ and cmd/api/migrate.go.
 ?prev-migrator-against-new-schema
