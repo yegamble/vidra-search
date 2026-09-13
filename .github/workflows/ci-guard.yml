@@ -14,16 +14,33 @@ name: ci-guard
 #   5. a docker/build-push-action `no-cache-filters` names a stage its Dockerfile
 #      does not define (buildkit ignores that silently, and the release would
 #      replay the cached `apk upgrade` layer the filter exists to prevent).
+#   6. the `ci-required` fan-in (scripts/ci/require-checks.sh) passes a commit
+#      its regression suite says it must not,
+#   7. .github/required-checks.txt drops an entry the base branch requires
+#      without a `# retired: <name> — <reason>` tombstone in the same file
+#      (which is why that file is in the path filter below: it defines
+#      "required", and a PR that only edits it ran no guard at all),
+#   8. a script under scripts/ci does not pass `bash -n` and `shellcheck -x`.
 on:
   push:
     branches: [main]
     paths:
       - ".github/workflows/**"
       - "scripts/ci/**"
+      - ".github/required-checks.txt"
+      # The Dockerfile too: check-workflow-yaml.py asserts every no-cache-filters
+      # value names a real build stage, and a stage rename is a Dockerfile-only
+      # edit — without this line that edit would never run the guard.
+      - "Dockerfile"
   pull_request:
     paths:
       - ".github/workflows/**"
       - "scripts/ci/**"
+      - ".github/required-checks.txt"
+      # The Dockerfile too: check-workflow-yaml.py asserts every no-cache-filters
+      # value names a real build stage, and a stage rename is a Dockerfile-only
+      # edit — without this line that edit would never run the guard.
+      - "Dockerfile"
   workflow_dispatch:
 
 permissions:
@@ -44,6 +61,19 @@ jobs:
 
       - name: Workflow files parse the way GitHub parses them; no-cache-filters name real stages
         run: python3 scripts/ci/check-workflow-yaml.py
+
+      # Everything under scripts/ci is what the steps below and ci-required
+      # itself run, and none of it was shell-linted here: a syntax error in a
+      # guard showed up as a red step, but an unquoted variable or a dropped
+      # exit code showed up as nothing. `-x` follows sourced files. TWIN: the
+      # same step in the other component repos; meta lints scripts/ci in
+      # meta-ci's own lint loop.
+      - name: scripts/ci is syntax-checked and shellchecked
+        run: |
+          for f in scripts/ci/*.sh; do
+            bash -n "$f"
+            shellcheck -x "$f"
+          done
 
       - name: External actions use immutable commit pins
         run: |
@@ -72,6 +102,29 @@ jobs:
 
       - name: Every required check name is a job some workflow defines
         run: bash scripts/ci/check-required-manifest.sh
+
+      # The file that step reads is what "required" MEANS, and it was the one
+      # file no gate watched: a PR whose only change deleted a line from it ran
+      # no ci-guard (the path filter did not include the file), ci-required
+      # read the shortened manifest at the PR head, and the lane was gone with
+      # nothing red. Now removing an entry fails unless the same file carries
+      # `# retired: <name> — <reason>` for it — one reviewable diff. The guard
+      # fetches the base branch's copy from origin itself (depth 1 suffices).
+      # TWIN: the same two steps in the other component repos; meta runs the
+      # guard in its validate job and the suite from its unit tests.
+      - name: The manifest-removals guard stays fail-closed
+        run: bash scripts/ci/check-required-manifest-removals_test.sh
+
+      - name: Retiring a required lane is a deliberate, tombstoned edit
+        run: bash scripts/ci/check-required-manifest-removals.sh
+
+      # `ci-required` is the one check branch protection trusts, so every way
+      # it can mis-read the API is a way to merge with a proof missing. The
+      # suite drives it with a stub `gh` over raw JSON fixtures: failed and
+      # partial reads, zero-job runs, duplicate check-run names. TWIN: the same
+      # step in vidra-core and vidra-user; meta runs it from its unit tests.
+      - name: The ci-required fan-in stays fail-closed
+        run: bash scripts/ci/require-checks_test.sh
 
       - name: Search CI runs the canonical gate
         run: |

@@ -24,6 +24,10 @@ on:
 permissions:
   contents: read
   checks: read
+  # The zero-job guard lists workflow runs and their jobs (the Actions API).
+  # Without this it works only while the repo is public; on a private repo the
+  # read fails and the gate fails closed as "GitHub API unavailable".
+  actions: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -48,4 +52,14 @@ jobs:
           # no check runs; the lanes report against the PR head.
           CHECK_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           DEADLINE_MINUTES: "45"
+          # Two reads per poll (check-runs, workflow runs), plus one per failed
+          # run seen for the first time. At 20 s that was 360 requests an hour
+          # for each running gate, against GITHUB_TOKEN's budget of 1,000 an
+          # hour PER REPOSITORY — three of these jobs open at once (three PRs
+          # pushed together) could rate-limit each other into "GitHub API
+          # unavailable". At 45 s it is 160 an hour: six run side by side with
+          # room left for every other job's calls. A rate-limited read now
+          # waits for the reset instead of counting as an outage, so this is
+          # about not spending the budget, not about surviving it.
+          POLL_SECONDS: "45"
         run: bash scripts/ci/require-checks.sh
