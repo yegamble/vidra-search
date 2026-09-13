@@ -28,7 +28,11 @@
 #     call failed decides nothing: it is retried, and a read still failing at
 #     the deadline fails the gate as "GitHub API unavailable";
 #   * one check name appearing twice on a commit — see "Which check-run
-#     decides" below.
+#     decides" below;
+#   * a `?name` lane read as "not triggered" while the run that would create
+#     its check-run is still queued — see the `missing` verdict below;
+#   * this token's own rate limit (1,000 requests an hour PER REPOSITORY,
+#     shared with every sibling job) read as an outage — see `rate_limit_wait`.
 #
 # It deliberately does NOT create or modify branch protection. The owner
 # configures exactly one required check, `ci-required`, per repo.
@@ -61,6 +65,17 @@ grep -Eq '^[0-9a-f]{40}$' <<<"$sha" \
 required=$(grep -vE '^[[:space:]]*(#|$)' "$manifest" | sed 's/[[:space:]]*$//')
 [ -n "$required" ] || { echo "::error::ci-required: $manifest lists no checks" >&2; exit 1; }
 
+# This gate's own workflow run, which is on the commit and in progress for as
+# long as this script runs (see `decide`). Both are Actions-provided; a local
+# run has neither and excludes nothing. GITHUB_WORKFLOW_REF is
+# `owner/repo/.github/workflows/<file>@<ref>`.
+SELF_RUN_ID=${GITHUB_RUN_ID:-}
+SELF_PATH=${GITHUB_WORKFLOW_REF:-}
+SELF_PATH=${SELF_PATH#*/}
+SELF_PATH=${SELF_PATH#*/}
+SELF_PATH=${SELF_PATH%%@*}
+export SELF_RUN_ID SELF_PATH
+
 echo "ci-required: commit ${sha}"
 echo "ci-required: manifest ${manifest}"
 printf '%s\n' "$required" | sed 's/^/  - /'
@@ -71,6 +86,10 @@ trap 'rm -f "$gh_err"' EXIT
 # fetch URL [gh api args...] — one read into $fetched. Any non-zero gh exit
 # fails it, with the reason in $api_error. That includes `--paginate` dying on
 # a later page AFTER printing the earlier ones: partial output is not an answer.
+# A 403/429 that says "rate limit" also sets $rate_limited: that read did not
+# fail because GitHub was down, it failed because this token's hourly budget
+# is spent — by this job and every other one running in the repository — and
+# the answer is to wait for the reset, not to count an outage.
 fetch() {
   local url=$1
   shift
@@ -79,7 +98,29 @@ fetch() {
   fi
   fetched=""
   api_error="${url}: $(tr '\n' ' ' <"$gh_err" | cut -c1-300 | sed 's/ *$//')"
+  if grep -Eqi 'rate limit|HTTP 429' "$gh_err"; then rate_limited=1; fi
   return 1
+}
+
+# rate_limit_wait — seconds to sleep before polling again after a rate-limited
+# read: until the primary limit resets, as the rate_limit endpoint reports it
+# (GitHub does not count that call), capped at the deadline. A secondary limit
+# ("You have exceeded a secondary rate limit") is not on that clock; GitHub's
+# guidance for it is to wait at least a minute, and a reset that cannot be read
+# gets the same minute. Never negative: the deadline check runs first.
+rate_limit_wait() {
+  local now wait=60 reset
+  now=$(date +%s)
+  if ! grep -Eqi 'secondary rate limit' "$gh_err"; then
+    if fetch rate_limit --jq '.resources.core.reset' && [ -n "$fetched" ] && [ "$fetched" -eq "$fetched" ] 2>/dev/null; then
+      reset=$fetched
+      wait=$((reset - now + 1))
+      [ "$wait" -ge 1 ] || wait=1
+    fi
+  fi
+  [ $((now + wait)) -le "$deadline" ] || wait=$((deadline - now))
+  [ "$wait" -ge 0 ] || wait=0
+  echo "$wait"
 }
 
 # --- Which check-run decides --------------------------------------------------
@@ -109,11 +150,25 @@ fetch() {
 #      same job name are two proofs, and a success in one must not hide a
 #      failure in the other. A check-run whose workflow run is not listed is
 #      its own group — stricter, never looser.
-# decide NAME prints "missing", "pending <why>", "success" or
+# A lane with NO check-run at all is "missing" — unless it is optional and
+# some workflow run on the commit is still queued or in progress. GitHub
+# creates a job's check-run when the job starts, not when the run is created,
+# so for the first seconds of a run its lanes do not exist yet, and an absent
+# `?name` read at that moment as "not triggered" is exactly the fail-open this
+# manifest syntax exists to avoid (vidra-search#44's gate printed it 1.1 s
+# after starting). Nothing says WHICH file an absent lane belongs to, so any
+# run still going holds it pending. Every run completes, so it converges —
+# except the run doing the asking: this gate's own run is in progress for as
+# long as this script runs, so it is left out (by run id and by workflow
+# file, so a second ci-required run on the same commit cannot hold this one).
+# decide NAME OPTIONAL prints "missing", "pending <why>", "success" or
 # "failed <conclusion> (<file>)[; ...]". Anything else is treated as a failure.
 decide() {
-  LANE=$1 awk -F'\t' '
+  LANE=$1 OPTIONAL=$2 awk -F'\t' '
     FILENAME == ARGV[1] {
+      if ($4 != "" && $4 != "completed" && $1 != ENVIRON["SELF_RUN_ID"] && $3 != ENVIRON["SELF_PATH"]) {
+        active = "run " $1 " of " $3 " is " $4
+      }
       if ($2 == "") next
       file[$2] = $3; run[$2] = $1 + 0; status[$2] = $4
       runs_of[$3]++; suite_of[$3, runs_of[$3]] = $2
@@ -132,7 +187,10 @@ decide() {
       }
     }
     END {
-      if (!seen) { print "missing"; exit }
+      if (!seen) {
+        if (ENVIRON["OPTIONAL"] == "1" && active != "") { print "pending no check-run yet, but " active " and may still create one"; exit }
+        print "missing"; exit
+      }
       if (waiting != "") { print "pending " waiting; exit }
       bad = ""
       for (f in files) {
@@ -209,7 +267,7 @@ EOM
     name=$entry
     if [ "${name#\?}" != "$name" ]; then optional=1; name=${name#\?}; fi
 
-    verdict=$(decide "$name") || verdict="unreadable"
+    verdict=$(decide "$name" "$optional") || verdict="unreadable"
     case $verdict in
       success) ;;
       missing)
@@ -230,11 +288,13 @@ EOM
 deadline=$(( $(date +%s) + deadline_min * 60 ))
 polls=0
 api_failures=0
+rate_limits=0
 jobs_known=" "
 
 while :; do
   polls=$((polls + 1))
   api_error=""
+  rate_limited=0
   if poll; then
     if [ -n "$failed" ]; then
       echo "::error::ci-required: a required lane did not succeed:" >&2
@@ -245,6 +305,9 @@ while :; do
       echo "OK: every required check on ${sha} concluded success."
       exit 0
     fi
+  elif [ "$rate_limited" -eq 1 ]; then
+    rate_limits=$((rate_limits + 1))
+    echo "warning: GitHub rate-limited this token, so this poll decides nothing: ${api_error}"
   else
     api_failures=$((api_failures + 1))
     echo "warning: a GitHub API read failed, so this poll decides nothing: ${api_error}"
@@ -253,7 +316,7 @@ while :; do
   now=$(date +%s)
   if [ "$now" -ge "$deadline" ] || { [ "$max_polls" -gt 0 ] && [ "$polls" -ge "$max_polls" ]; }; then
     if [ -n "$api_error" ]; then
-      echo "::error::ci-required: GitHub API unavailable — ${api_failures} of ${polls} polls could not read ${sha}, including the last, so nothing is confirmed after ${deadline_min} minutes. Last error: ${api_error}" >&2
+      echo "::error::ci-required: GitHub API unavailable — $((api_failures + rate_limits)) of ${polls} polls could not read ${sha} (${rate_limits} of them rate-limited), including the last, so nothing is confirmed after ${deadline_min} minutes. Last error: ${api_error}" >&2
       exit 1
     fi
     echo "::error::ci-required: gave up after ${deadline_min} minutes." >&2
@@ -262,6 +325,12 @@ while :; do
     exit 1
   fi
 
+  if [ "$rate_limited" -eq 1 ]; then
+    wait=$(rate_limit_wait)
+    echo "waiting ${wait}s for the rate limit to reset"
+    sleep "$wait"
+    continue
+  fi
   if [ -z "$api_error" ]; then
     [ -n "$pending" ] && printf 'waiting: %s' "$(printf '%s' "$pending" | tr '\n' ' ')"
     [ -n "$missing" ] && printf 'not yet started: %s' "$(printf '%s' "$missing" | tr '\n' ' ')"
