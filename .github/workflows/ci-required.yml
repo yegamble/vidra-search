@@ -24,6 +24,10 @@ on:
 permissions:
   contents: read
   checks: read
+  # The zero-job guard lists workflow runs and their jobs (the Actions API).
+  # Without this it works only while the repo is public; on a private repo the
+  # read fails and the gate fails closed as "GitHub API unavailable".
+  actions: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

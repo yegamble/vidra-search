@@ -10,7 +10,9 @@ name: ci-guard
 #   3. search-ci.yml does not invoke the canonical `make ci` gate,
 #   4. .github/required-checks.txt names a job no workflow defines (a rename
 #      would otherwise leave `ci-required` waiting for a check that can never
-#      appear, and the failure would arrive as a timeout an hour later).
+#      appear, and the failure would arrive as a timeout an hour later),
+#   5. the `ci-required` fan-in (scripts/ci/require-checks.sh) passes a commit
+#      its regression suite says it must not.
 on:
   push:
     branches: [main]
@@ -69,6 +71,14 @@ jobs:
 
       - name: Every required check name is a job some workflow defines
         run: bash scripts/ci/check-required-manifest.sh
+
+      # `ci-required` is the one check branch protection trusts, so every way
+      # it can mis-read the API is a way to merge with a proof missing. The
+      # suite drives it with a stub `gh` over raw JSON fixtures: failed and
+      # partial reads, zero-job runs, duplicate check-run names. TWIN: the same
+      # step in vidra-core and vidra-user; meta runs it from its unit tests.
+      - name: The ci-required fan-in stays fail-closed
+        run: bash scripts/ci/require-checks_test.sh
 
       - name: Search CI runs the canonical gate
         run: |
