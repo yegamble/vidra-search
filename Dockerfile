@@ -38,7 +38,7 @@ RUN set -eu; \
     CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="$ldflags" -o /out/api ./cmd/api
 
 # ---- runtime stage ----
-FROM alpine:3.24
+FROM alpine:3.24 AS runtime
 # `apk upgrade` FIRST: the base image lags the package repository. Official
 # alpine:3.24 is rebuilt for Alpine point releases, not for each package fix,
 # and `apk add` never upgrades a package the base already carries — so a plain
@@ -49,9 +49,10 @@ FROM alpine:3.24
 # advisory against the image is a real finding for every operator who scans.
 # Trade-off, stated honestly: the image now takes whatever v3.24 main serves
 # at build time, so two builds of one commit can differ in patch-level
-# packages; the scan of the pushed digest is the record of what shipped. A
-# builder that reuses a cached layer for this RUN (e.g. publish-container's
-# GHA cache, same base digest) also reuses its package set.
+# packages. A cached layer for this RUN would silently re-ship an OLDER package
+# set — neither the base digest nor this line changes when a fix lands — so
+# publish-container.yml rebuilds this stage with no-cache-filters. Nothing scans
+# the pushed digest yet; release qualification has to.
 RUN apk upgrade --no-cache && \
     apk add --no-cache ca-certificates wget && adduser -D -u 10001 vidra
 

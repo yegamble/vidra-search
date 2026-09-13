@@ -131,6 +131,10 @@ jobs:
             BUILD_DATE=${{ steps.buildinfo.outputs.date }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          # Always rebuild the shipped stage: its `apk upgrade` layer is keyed on
+          # an unchanged base digest and command, so the GHA cache would replay
+          # yesterday's package set into a release. Build stages stay cached.
+          no-cache-filters: runtime
 
       - name: Attest build provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
