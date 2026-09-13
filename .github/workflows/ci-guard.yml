@@ -25,11 +25,19 @@ on:
       - ".github/workflows/**"
       - "scripts/ci/**"
       - ".github/required-checks.txt"
+      # The Dockerfile too: check-workflow-yaml.py asserts every no-cache-filters
+      # value names a real build stage, and a stage rename is a Dockerfile-only
+      # edit — without this line that edit would never run the guard.
+      - "Dockerfile"
   pull_request:
     paths:
       - ".github/workflows/**"
       - "scripts/ci/**"
       - ".github/required-checks.txt"
+      # The Dockerfile too: check-workflow-yaml.py asserts every no-cache-filters
+      # value names a real build stage, and a stage rename is a Dockerfile-only
+      # edit — without this line that edit would never run the guard.
+      - "Dockerfile"
   workflow_dispatch:
 
 permissions:
