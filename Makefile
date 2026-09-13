@@ -161,6 +161,21 @@ seed-loadtest: ## Seed N synthetic documents for the load test (N via COUNT, def
 loadtest: ## Drive the suggestions endpoint and report p50/p95/p99 (see scripts/loadtest)
 	go run ./scripts/loadtest -mode=drive -rps=$${RPS:-50} -duration=$${DURATION:-30s}
 
+# govulncheck runs through the module proxy at an EXACT version, so the Go
+# checksum database pins the scanner itself and nothing needs installing. It
+# reports only vulnerabilities reachable from this module's code, against the
+# standard library of the toolchain running it — CI runs it on the release
+# image's Go line for that reason. -show verbose prints the "required but not
+# called" module findings too: informational, never hidden. Needs network, so
+# it is deliberately NOT part of `make ci`; vuln.yml runs it as its own lane.
+# TWIN: vidra-core and vidra-search carry the same target and the same lane.
+GOVULNCHECK_VERSION := v1.3.0
+
+.PHONY: vuln
+vuln: ## Scan for known Go vulnerabilities reachable from this module (needs network; not in `make ci`)
+	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) -version   # scanner, Go and database freshness, for the record
+	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) -show verbose ./...
+
 .PHONY: check
 check: fmt vet test ## Run the standard local gate (fmt, vet, test)
 

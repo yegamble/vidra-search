@@ -16,9 +16,16 @@ definition of required, and fails if any listed lane failed, was cancelled,
 timed out, or **never ran** (a `paths:` filter that grew too narrow, or a
 renamed job, otherwise removes a proof from every PR with no signal at all).
 
-Required: `build-test`, `integration`, `openapi`, plus `guard`,
+Required: `build-test`, `integration`, `openapi`, `govulncheck`, plus `guard`,
 `prev-migrator-against-new-schema` and `smoke` (training) when their path
 filters fire. `publish` is release-triggered and not a PR gate.
+
+**`govulncheck` can go red with no change in this repo.** `vuln.yml` runs
+`make vuln` (govulncheck, pinned) on every PR, on main and daily, on the release
+image's Go line: it fails when this module's code reaches a known Go
+vulnerability, and when the scan cannot run. The fix is upgrading the named
+module or the Go toolchain — the one exception to "Dependabot owns bumps"
+below. Never skip or narrow the scan to get green.
 
 **No silent skips.** Every integration test here self-skips on an unset
 `DATABASE_URL`/`REDIS_URL` — right on a laptop, wrong in the lane whose job is
@@ -54,7 +61,8 @@ make ci        # fmt-check, vet, migrate-lint, openapi-verify, sqlc-verify, test
    `internal/store/queries/` and run `make sqlc`.
 3. **Migrations are append-only**: new file with the next number and a
    matching `.down.sql`. Never edit an existing migration.
-4. **Do not bump dependencies** (Dependabot owns bumps), do not touch
+4. **Do not bump dependencies** (Dependabot owns bumps — except the smallest
+   upgrade that clears a `govulncheck` finding), do not touch
    `.github/workflows`, never commit secrets or `.env` files.
 
 ## Git hygiene — finished means merged (all agents / AI tools)

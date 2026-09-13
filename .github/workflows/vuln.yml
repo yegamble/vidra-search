@@ -1,0 +1,62 @@
+name: vuln
+
+# Known-vulnerability gate for the Go module (QLT-01 / REL-01 security facet).
+# Until this lane, no workflow in any vidra repo asked whether shipped code
+# reaches a published Go vulnerability; a release could only be called "scanned"
+# on the strength of a one-off local run.
+#
+# `make vuln` runs govulncheck at a pinned version. It fails (exit 3) when this
+# module's code can reach a vulnerable symbol, and it fails when the scan cannot
+# run at all — an unreachable vulnerability database is not a clean scan.
+#
+# Triggers:
+#   pull_request / push — a change must not introduce a reachable vulnerability;
+#   schedule            — vulnerabilities are published against code nobody is
+#                         touching, so main is re-scanned daily with no commit.
+#
+# Toolchain: the RELEASE IMAGE's Go line (Dockerfile: golang:1.27-alpine), since
+# standard-library findings depend on the toolchain doing the scan. This scans
+# SOURCE on the newest 1.27 patch; a published image built on an older patch is
+# release qualification's job (a binary scan of the pinned image), not this one.
+#
+# TWIN: vidra-core and vidra-search carry the same workflow. Keep in step.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "41 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GOFLAGS: -mod=readonly
+
+# The event is part of the group: the daily scheduled run lands on main's head
+# commit, and must never cancel that same commit's push run — a `cancelled`
+# check-run fails ci-required.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  govulncheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27"
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Scan reachable code for known vulnerabilities
+        run: |
+          go version
+          make vuln

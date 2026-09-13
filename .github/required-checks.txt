@@ -23,6 +23,11 @@ integration
 # openapi.yml — spec lint + route/spec drift guard.
 openapi
 
+# vuln.yml — govulncheck: fails when this module's code reaches a known Go
+# vulnerability, or when the scan cannot run. Not path-filtered and re-run
+# daily, because new vulnerabilities arrive without a commit. TWIN in both Go repos.
+govulncheck
+
 # ci-guard.yml — action pins, no hidden continue-on-error, search-ci really runs
 # `make ci`, required-checks.txt names only jobs that exist. Path-filtered to
 # .github/workflows/**.
