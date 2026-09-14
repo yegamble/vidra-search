@@ -4,7 +4,7 @@ go 1.26.2
 
 require (
 	github.com/dmitryikh/leaves v0.0.0-20230708180554-25d19a787328
-	github.com/golang-migrate/migrate/v4 v4.19.1
+	github.com/golang-migrate/migrate/v4 v4.20.1
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/labstack/echo/v4 v4.15.4
