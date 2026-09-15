@@ -219,9 +219,12 @@ func (s *Service) candidates(ctx context.Context, normalized string, req Request
 		return nil, err
 	}
 	for _, r := range titles {
+		// VideoID rides along so the gateway can re-check this title against the
+		// authoritative video row before showing it (H1). Kept as a query-kind
+		// completion: the id authorizes the suggestion, it does not retype it.
 		cands = append(cands, ranking.Candidate{
 			Text: r.Title, Kind: ranking.KindQuery, Source: ranking.SourceDoc,
-			ExactPrefix: true, Popularity: float64(r.Views),
+			VideoID: r.VideoID.String(), ExactPrefix: true, Popularity: float64(r.Views),
 		})
 	}
 
@@ -325,9 +328,11 @@ func (s *Service) candidates(ctx context.Context, normalized string, req Request
 			return nil, err
 		}
 		for _, r := range fuzzy {
+			// VideoID rides along for the gateway's H1 re-check, same as the
+			// exact-prefix title stream above.
 			cands = append(cands, ranking.Candidate{
 				Text: r.Title, Kind: ranking.KindQuery, Source: ranking.SourceDoc,
-				ExactPrefix: false, Popularity: float64(r.Views),
+				VideoID: r.VideoID.String(), ExactPrefix: false, Popularity: float64(r.Views),
 			})
 		}
 	}

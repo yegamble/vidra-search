@@ -110,14 +110,33 @@ func Blend(candidates []Candidate, limit int, w Weights) []Suggestion {
 		}
 		s := blendScore(c, maxPop, w)
 		cur, ok := best[key]
-		if !ok || better(scoredCandidate{c, s}, cur) {
-			// Preserve a personal flag if any duplicate was personal.
-			if ok && cur.cand.IsPersonal {
+		if !ok {
+			best[key] = scoredCandidate{c, s}
+			continue
+		}
+		// Whichever variant wins the score, carry forward two properties any
+		// losing duplicate established for this text:
+		//   - IsPersonal, so a personal match still reads as personal; and
+		//   - VideoID, so a doc-derived variant's backing video id survives even
+		//     when a higher-scoring aggregate/history variant (which carries no
+		//     id) wins. The gateway's H1 authorization re-check keys off that id,
+		//     so losing it here would let a private title ride out on the merged
+		//     row unchecked.
+		if better(scoredCandidate{c, s}, cur) {
+			if cur.cand.IsPersonal {
 				c.IsPersonal = true
 			}
+			if c.VideoID == "" && cur.cand.VideoID != "" {
+				c.VideoID = cur.cand.VideoID
+			}
 			best[key] = scoredCandidate{c, s}
-		} else if c.IsPersonal {
-			cur.cand.IsPersonal = true
+		} else {
+			if c.IsPersonal {
+				cur.cand.IsPersonal = true
+			}
+			if cur.cand.VideoID == "" && c.VideoID != "" {
+				cur.cand.VideoID = c.VideoID
+			}
 			best[key] = cur
 		}
 	}
