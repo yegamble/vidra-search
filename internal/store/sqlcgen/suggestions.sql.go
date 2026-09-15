@@ -145,7 +145,7 @@ func (q *Queries) SuggestTagPrefix(ctx context.Context, arg SuggestTagPrefixPara
 const suggestTitleFuzzy = `-- name: SuggestTitleFuzzy :many
 SELECT DISTINCT ON (lower(d.title)) d.title,
        similarity(lower(d.title), $1::text)::real AS sim,
-       d.views
+       d.views, d.video_id
 FROM search.documents d
 WHERE d.eligible
   AND (NOT $2::bool OR NOT d.is_sensitive)
@@ -165,13 +165,17 @@ type SuggestTitleFuzzyParams struct {
 }
 
 type SuggestTitleFuzzyRow struct {
-	Title string  `json:"title"`
-	Sim   float32 `json:"sim"`
-	Views int64   `json:"views"`
+	Title   string    `json:"title"`
+	Sim     float32   `json:"sim"`
+	Views   int64     `json:"views"`
+	VideoID uuid.UUID `json:"video_id"`
 }
 
 // Typo fallback: trigram-similar titles, used only when exact-prefix results are
 // short of the requested limit. Threshold 0.35 (algorithms report).
+// video_id (representative eligible doc) rides along so the gateway can re-check
+// the fuzzy-matched title against the authoritative video row (H1), exactly as
+// the exact-prefix stream does.
 func (q *Queries) SuggestTitleFuzzy(ctx context.Context, arg SuggestTitleFuzzyParams) ([]SuggestTitleFuzzyRow, error) {
 	rows, err := q.db.Query(ctx, suggestTitleFuzzy, arg.Q, arg.HideSensitive, arg.Lim)
 	if err != nil {
@@ -181,7 +185,12 @@ func (q *Queries) SuggestTitleFuzzy(ctx context.Context, arg SuggestTitleFuzzyPa
 	var items []SuggestTitleFuzzyRow
 	for rows.Next() {
 		var i SuggestTitleFuzzyRow
-		if err := rows.Scan(&i.Title, &i.Sim, &i.Views); err != nil {
+		if err := rows.Scan(
+			&i.Title,
+			&i.Sim,
+			&i.Views,
+			&i.VideoID,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -193,7 +202,7 @@ func (q *Queries) SuggestTitleFuzzy(ctx context.Context, arg SuggestTitleFuzzyPa
 }
 
 const suggestTitlePrefix = `-- name: SuggestTitlePrefix :many
-SELECT DISTINCT ON (lower(d.title)) d.title, d.views
+SELECT DISTINCT ON (lower(d.title)) d.title, d.views, d.video_id
 FROM search.documents d
 WHERE d.eligible
   AND (NOT $1::bool OR NOT d.is_sensitive)
@@ -209,13 +218,18 @@ type SuggestTitlePrefixParams struct {
 }
 
 type SuggestTitlePrefixRow struct {
-	Title string `json:"title"`
-	Views int64  `json:"views"`
+	Title   string    `json:"title"`
+	Views   int64     `json:"views"`
+	VideoID uuid.UUID `json:"video_id"`
 }
 
 // Doc-derived completions: distinct eligible titles whose lowercase form starts
 // with the (already normalized) prefix. Uses the lower(title) text_pattern_ops
 // index. @prefix must be the normalized prefix with a trailing '%'.
+// video_id is the representative (highest-views) eligible doc backing each title:
+// the index carries only a STATIC eligibility flag, so the gateway (vidra-core)
+// re-checks this id against the authoritative video row before the title is shown
+// (H1) — a stale/corrupted eligible flag must not leak a private title.
 func (q *Queries) SuggestTitlePrefix(ctx context.Context, arg SuggestTitlePrefixParams) ([]SuggestTitlePrefixRow, error) {
 	rows, err := q.db.Query(ctx, suggestTitlePrefix, arg.HideSensitive, arg.Prefix, arg.Lim)
 	if err != nil {
@@ -225,7 +239,7 @@ func (q *Queries) SuggestTitlePrefix(ctx context.Context, arg SuggestTitlePrefix
 	var items []SuggestTitlePrefixRow
 	for rows.Next() {
 		var i SuggestTitlePrefixRow
-		if err := rows.Scan(&i.Title, &i.Views); err != nil {
+		if err := rows.Scan(&i.Title, &i.Views, &i.VideoID); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

@@ -2,7 +2,11 @@
 -- Doc-derived completions: distinct eligible titles whose lowercase form starts
 -- with the (already normalized) prefix. Uses the lower(title) text_pattern_ops
 -- index. @prefix must be the normalized prefix with a trailing '%'.
-SELECT DISTINCT ON (lower(d.title)) d.title, d.views
+-- video_id is the representative (highest-views) eligible doc backing each title:
+-- the index carries only a STATIC eligibility flag, so the gateway (vidra-core)
+-- re-checks this id against the authoritative video row before the title is shown
+-- (H1) — a stale/corrupted eligible flag must not leak a private title.
+SELECT DISTINCT ON (lower(d.title)) d.title, d.views, d.video_id
 FROM search.documents d
 WHERE d.eligible
   AND (NOT @hide_sensitive::bool OR NOT d.is_sensitive)
@@ -56,9 +60,12 @@ LIMIT @lim::int;
 -- name: SuggestTitleFuzzy :many
 -- Typo fallback: trigram-similar titles, used only when exact-prefix results are
 -- short of the requested limit. Threshold 0.35 (algorithms report).
+-- video_id (representative eligible doc) rides along so the gateway can re-check
+-- the fuzzy-matched title against the authoritative video row (H1), exactly as
+-- the exact-prefix stream does.
 SELECT DISTINCT ON (lower(d.title)) d.title,
        similarity(lower(d.title), @q::text)::real AS sim,
-       d.views
+       d.views, d.video_id
 FROM search.documents d
 WHERE d.eligible
   AND (NOT @hide_sensitive::bool OR NOT d.is_sensitive)

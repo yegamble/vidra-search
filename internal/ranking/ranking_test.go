@@ -54,6 +54,27 @@ func TestBlendPersonalFlagSurvivesDedupe(t *testing.T) {
 	}
 }
 
+// TestBlendVideoIDSurvivesDedupe guards the H1 authorization path: a doc-derived
+// title candidate carries the backing video id, and when a higher-scoring
+// aggregate/query variant of the SAME text (which has no id) wins the dedupe, the
+// merged suggestion must still carry that id — the gateway's per-video re-check
+// keys off it, so losing it would let a private title ride out unchecked.
+func TestBlendVideoIDSurvivesDedupe(t *testing.T) {
+	cands := []Candidate{
+		// The aggregate variant scores higher (much larger popularity) and has no
+		// video id; the doc variant carries the id but would otherwise lose.
+		{Text: "leaky title", Kind: KindQuery, Source: SourceQuery, ExactPrefix: true, Popularity: 9000},
+		{Text: "leaky title", Kind: KindQuery, Source: SourceDoc, VideoID: "vid-123", ExactPrefix: true, Popularity: 1},
+	}
+	got := Blend(cands, 10, DefaultWeights)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 deduped suggestion, got %d: %v", len(got), texts(got))
+	}
+	if got[0].VideoID != "vid-123" {
+		t.Fatalf("video id must survive dedupe so the gateway can re-check it, got %+v", got[0])
+	}
+}
+
 func TestBlendReservesDocSlot(t *testing.T) {
 	// Fill the window with high-popularity query candidates, plus one weak
 	// doc-derived candidate that would otherwise be evicted.
