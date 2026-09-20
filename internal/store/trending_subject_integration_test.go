@@ -15,6 +15,7 @@ package store_test
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"testing"
 	"time"
 
@@ -37,8 +38,9 @@ func anonPlay(occurredAt time.Time, videoID uuid.UUID, session, subject string) 
 }
 
 // trendScore returns an item's decayed ranking score, and whether it is in the
-// ZSET at all. The score IS the contribution count here: each uncapped
-// contribution bumps by exactly 1 and no half-life elapses within a test.
+// ZSET at all. The score is the contribution count DECAYED to read time: each
+// uncapped contribution bumps by exactly 1, then the sweeper decays it. Assert
+// on it with assertTrendScore, never with ==.
 func trendScore(t *testing.T, env *testEnv, domain, item string) (float64, bool) {
 	t.Helper()
 	top, err := env.cache.TrendTop(context.Background(), domain, 100)
@@ -51,6 +53,60 @@ func trendScore(t *testing.T, env *testEnv, domain, item string) (float64, bool)
 		}
 	}
 	return 0, false
+}
+
+// trendingMaxWallClockSeconds is the wall clock these tests are allowed to burn
+// between the first TrendBump and the read that asserts on it. The whole test is
+// ~0.1 s today, so 60 s is ~600x headroom for a badly loaded CI runner.
+const trendingMaxWallClockSeconds = 60
+
+// trendingDecayFloor is the fraction of an undecayed contribution that survives
+// trendingMaxWallClockSeconds of decay:
+//
+//	2^(-60/21600) = 2^(-1/360) = 0.9980765...  ->  at most 0.19% of decay allowed.
+var trendingDecayFloor = math.Exp2(-float64(trendingMaxWallClockSeconds) / float64(testTrendingHalfLifeSeconds))
+
+// assertTrendScore checks a decayed ranking score against the number of
+// contributions the item legitimately earned, as a two-sided bound.
+//
+// WHY a bound and not `score == want`: TrendBump and TrendSweep each stamp
+// time.Now().Unix() — WHOLE seconds — and the sweep multiplies every member by
+// 2^(-elapsed/halfLife). A run that ingests and sweeps inside one second sees
+// elapsed=0 and an exactly integral score; a run that happens to straddle a
+// second boundary sees elapsed=1 and a score of 2^(-1/21600) = 0.9999679. That
+// 0.003% is wall clock, not ranking, and as an equality it reddened the required
+// `integration` check on an unrelated x/text bump (Dependabot #48, 2026-09-14),
+// roughly 1 run in 25. A security test that fails at random is a security test
+// people learn to re-run without reading.
+//
+// The tolerance is spent in ONE direction only:
+//
+//   - UPPER bound `score <= want` stays EXACT and STRICT, because this is the
+//     security assertion. Decay can only ever shrink a score, so no honest run
+//     can exceed its undecayed contribution count — while the abuse this file
+//     exists to catch (one subject rotating N session ids, or a broken cap)
+//     scores 2x, 8x, 12x `want` and still fails as loudly as before.
+//   - LOWER bound `score >= want*trendingDecayFloor` absorbs decay and nothing
+//     else. A LOST contribution lands at `want-1` — for want=1 the item is gone
+//     from the ZSET, and even at want=4 that is 3.0 against a floor of 3.99 —
+//     so dropping an event still fails. Nothing but decay fits in the band.
+//
+// (Precedent: assertAggregateMatchesLedger in aggregates_retention_integration_test.go
+// already compares the other decayed number, decayed_freq, within 1e-6.)
+func assertTrendScore(t *testing.T, env *testEnv, domain, item string, want float64, why string) {
+	t.Helper()
+	score, ok := trendScore(t, env, domain, item)
+	if !ok {
+		t.Errorf("ranking score for %q is absent from the %q trend set, want ~%v: %s", item, domain, want, why)
+		return
+	}
+	if score > want {
+		t.Errorf("ranking score = %v, want at most %v — INFLATED: %s", score, want, why)
+	}
+	if floor := want * trendingDecayFloor; score < floor {
+		t.Errorf("ranking score = %v, want at least %v (%v less up to %d s of 6 h-half-life decay): %s",
+			score, floor, want, trendingMaxWallClockSeconds, why)
+	}
 }
 
 // trendDistinct returns the distinct-subject estimate trending's floor gate reads.
@@ -84,9 +140,8 @@ func TestIntegrationRotatedSessionsCannotInflateTrending(t *testing.T) {
 	if d := trendDistinct(t, env, "q", nq); d != 1 {
 		t.Errorf("distinct subjects = %d, want 1: %d rotated session ids from ONE server-derived subject are one contributor", d, n)
 	}
-	if score, ok := trendScore(t, env, "q", nq); !ok || score != 1 {
-		t.Errorf("ranking score = %v (present=%v), want exactly 1: rotating the session header must not buy extra ranking weight", score, ok)
-	}
+	assertTrendScore(t, env, "q", nq, 1,
+		"rotating the session header must not buy extra ranking weight")
 	if set := env.cache.TrendingQuerySet(context.Background()); set[nq] != 0 {
 		t.Errorf("a query pushed by ONE anonymous subject must not be published as trending, got %v", set)
 	}
@@ -111,9 +166,8 @@ func TestIntegrationRotatedSessionsCannotInflateVideoTrending(t *testing.T) {
 	if d := trendDistinct(t, env, "v", vid.String()); d != 1 {
 		t.Errorf("distinct subjects on the video domain = %d, want 1", d)
 	}
-	if score, _ := trendScore(t, env, "v", vid.String()); score != 1 {
-		t.Errorf("video ranking score = %v, want exactly 1", score)
-	}
+	assertTrendScore(t, env, "v", vid.String(), 1,
+		"rotating the session header must not inflate the home feed's video ranking")
 	for _, s := range env.cache.TrendingVideos(context.Background()) {
 		if s.Item == vid.String() {
 			t.Errorf("a video pushed by ONE anonymous subject must not be published as trending")
@@ -141,9 +195,8 @@ func TestIntegrationDistinctSubjectsStillTrend(t *testing.T) {
 	if d := trendDistinct(t, env, "q", nq); d != n {
 		t.Errorf("distinct subjects = %d, want %d: N distinct subjects are N contributors", d, n)
 	}
-	if score, ok := trendScore(t, env, "q", nq); !ok || score != float64(n) {
-		t.Errorf("ranking score = %v (present=%v), want %d", score, ok, n)
-	}
+	assertTrendScore(t, env, "q", nq, float64(n),
+		"N distinct subjects must each buy their one contribution")
 	if _, ok := env.cache.TrendingQuerySet(context.Background())[nq]; !ok {
 		t.Errorf("a query from %d distinct anonymous subjects must be published as trending", n)
 	}
@@ -170,9 +223,8 @@ func TestIntegrationTrendingFallsBackToSessionWithoutSubject(t *testing.T) {
 	if d := trendDistinct(t, env, "q", nq); d != n {
 		t.Errorf("distinct = %d, want %d: with no subject to prefer, the session fallback must still count", d, n)
 	}
-	if score, ok := trendScore(t, env, "q", nq); !ok || score != float64(n) {
-		t.Errorf("ranking score = %v (present=%v), want %d — subject-less traffic must not silently stop contributing", score, ok, n)
-	}
+	assertTrendScore(t, env, "q", nq, float64(n),
+		"subject-less traffic must not silently stop contributing")
 	if _, ok := env.cache.TrendingQuerySet(context.Background())[nq]; !ok {
 		t.Errorf("an install emitting no subject_id must still be able to trend")
 	}
@@ -196,9 +248,8 @@ func TestIntegrationPerSubjectTrendCapAppliesUnderTheSubject(t *testing.T) {
 	ingest(t, env, batch...)
 	runWorker(t, env, "trending_sweeper")
 
-	if score, _ := trendScore(t, env, "q", nq); score != 1 {
-		t.Errorf("ranking score = %v, want 1: SEARCH_TREND_CAP_WINDOW must collapse %d contributions from one subject", score, repeats)
-	}
+	assertTrendScore(t, env, "q", nq, 1,
+		"SEARCH_TREND_CAP_WINDOW must collapse every repeat from one subject into one contribution")
 	total, err := env.cache.TrendTotal(context.Background(), "q", nq, 2)
 	if err != nil {
 		t.Fatalf("trend total: %v", err)

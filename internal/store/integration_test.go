@@ -36,6 +36,10 @@ import (
 	"github.com/vidra/vidra-search/internal/worker"
 )
 
+// testTrendingHalfLifeSeconds is the trend-ZSET decay half-life newTestEnv hands
+// the event service: 6 h, matching TRENDING_HALF_LIFE_HOURS' default.
+const testTrendingHalfLifeSeconds = 6 * 3600
+
 // testEnv bundles the live dependencies and services for a test.
 type testEnv struct {
 	store       *store.Store
@@ -90,7 +94,12 @@ func newTestEnv(t *testing.T) *testEnv {
 	q := st.Queries()
 	// A per-user trend cap window that easily spans a test run so repeated bumps
 	// from one subject collapse to a single ranking contribution.
-	eventCfg := event.Config{TrendCapWindow: time.Hour, TrendingHalfLifeSeconds: 6 * 3600, WatchHalfLifeHours: 720}
+	//
+	// testTrendingHalfLifeSeconds is the half-life every trend assertion in this
+	// package budgets its decay tolerance against (see assertTrendScore in
+	// trending_subject_integration_test.go) — the two must not drift apart, so
+	// the number lives here, once, where the env is built.
+	eventCfg := event.Config{TrendCapWindow: time.Hour, TrendingHalfLifeSeconds: testTrendingHalfLifeSeconds, WatchHalfLifeHours: 720}
 	workerCfg := worker.Config{MinQueryUserCount: 3, TrendCapWindow: time.Hour, WilsonFloor: 0.10}
 
 	modelDir := t.TempDir()
