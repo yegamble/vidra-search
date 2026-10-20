@@ -49,5 +49,8 @@ govulncheck
 # to training/**, so required exactly when the pipeline changed.
 ?smoke
 
+# training-audit.yml — exact Python lockfile audit on training/tooling changes, daily.
+?training-audit
+
 # NOT required, deliberately:
 #   publish    release-triggered image build, not a PR gate

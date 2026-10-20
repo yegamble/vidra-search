@@ -5,8 +5,11 @@ synthetic data, so the training path is validated without any real traffic or a
 database. It also asserts the feature-vector order matches the Go server contract.
 """
 
+import json
 import os
+import subprocess
 import tempfile
+from pathlib import Path
 
 import numpy as np
 
@@ -14,12 +17,15 @@ import train_ranker as tr
 
 
 def test_feature_order_matches_go_contract():
-    # Mirror of internal/ranking.ModelFeatureNames(). If the Go side changes, this
-    # must change in lock-step (the vector is the training/serving wire contract).
-    assert tr.FEATURES == [
-        "text_rank", "trgm_sim", "exact_flags", "log_views",
-        "age_days", "smoothed_ctr", "meaningful_rate", "language_match",
-    ]
+    # Execute the serving implementation rather than maintaining a second mirror.
+    result = subprocess.run(
+        ["go", "run", "./scripts/model-features"],
+        cwd=Path(__file__).resolve().parents[1],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert tr.FEATURES == json.loads(result.stdout)
 
 
 def test_synthetic_pipeline_trains_and_predicts():
