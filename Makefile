@@ -59,6 +59,19 @@ quality: fmt-check vet ## Static analysis, including unused code and integration
 workflow-lint: ## Analyze Actions semantics and security (requires Go, uv and ShellCheck)
 	bash scripts/ci/workflow-lint.sh
 
+.PHONY: hooks-install
+hooks-install: ## Install pinned commit/push checks, preserving existing custom hooks
+	bash scripts/install-hooks.sh
+
+# These offline Python checks stay out of the Go-only canonical gate.
+.PHONY: training-quality
+training-quality: ## Lint training Python with the declared Python 3.10 minimum
+	uv tool run --from 'ruff==0.17.1' ruff check training
+
+.PHONY: training-audit
+training-audit: ## Audit every locked training extra on the CI Python 3.11 line
+	bash scripts/ci/training-audit.sh
+
 .PHONY: test
 test: ## Run unit tests
 	go test ./...

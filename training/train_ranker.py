@@ -178,7 +178,7 @@ def make_leaves_compatible(path: str) -> None:
     writes ``version=v4``, which is structurally identical for the tree fields
     `leaves` reads (verified: predictions match LightGBM exactly). This ONLY
     rewrites the version tag — the trees are untouched."""
-    with open(path, "r") as f:
+    with open(path) as f:
         content = f.read()
     content = content.replace("version=v4", "version=v3", 1)
     with open(path, "w") as f:

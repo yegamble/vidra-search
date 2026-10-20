@@ -1,0 +1,82 @@
+name: training-audit
+
+# Python training dependencies are outside govulncheck's Go module graph.
+# Audit the exact lock on changes and daily, including development extras.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "training/**"
+      - "scripts/ci/training-audit.sh"
+      - "Makefile"
+      - ".github/workflows/training-audit.yml"
+  pull_request:
+    paths:
+      - "training/**"
+      - "scripts/ci/training-audit.sh"
+      - "Makefile"
+      - ".github/workflows/training-audit.yml"
+  schedule:
+    - cron: "23 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  training-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.11.28"
+          enable-cache: false
+      - name: Audit the locked training graph
+        run: |
+          mkdir -p ci-report
+          set -o pipefail
+          make training-audit 2>&1 | tee ci-report/training-audit.log
+      - name: Upload the audit log
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: training-audit-log
+          path: ci-report/
+          retention-days: 14
+          if-no-files-found: warn
+      - name: Track a red daily audit
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: "training-audit: the scheduled audit of main is red"
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SHA: ${{ github.sha }}
+        run: |
+          body="The daily training dependency audit failed.
+
+          - run: ${RUN_URL}
+          - commit: ${SHA}
+
+          The run log names the finding. Upgrade the affected locked package; never skip or narrow the scan. Close this issue when main audits cleanly."
+          number=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --search "\"$TITLE\" in:title" --json number,title \
+            --jq 'map(select(.title == env.TITLE)) | .[0].number // empty')
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$body"
+          fi

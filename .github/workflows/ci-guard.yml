@@ -27,6 +27,7 @@ on:
     paths:
       - ".github/workflows/**"
       - "scripts/ci/**"
+      - "scripts/install-hooks.sh"
       - "Makefile"
       - "lefthook.yml"
       - ".github/required-checks.txt"
@@ -38,6 +39,7 @@ on:
     paths:
       - ".github/workflows/**"
       - "scripts/ci/**"
+      - "scripts/install-hooks.sh"
       - "Makefile"
       - "lefthook.yml"
       - ".github/required-checks.txt"
@@ -88,7 +90,7 @@ jobs:
       # meta-ci's own lint loop.
       - name: scripts/ci is syntax-checked and shellchecked
         run: |
-          for f in scripts/ci/*.sh; do
+          for f in scripts/ci/*.sh scripts/install-hooks.sh; do
             bash -n "$f"
             shellcheck -x "$f"
           done

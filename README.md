@@ -120,17 +120,30 @@ part of the canonical `make ci` gate. `make vuln` also scans test dependencies.
 [uv](https://docs.astral.sh/uv/) and ShellCheck for that command. The CI guard
 runs the same command. Review scanner pins when updating the Go toolchain.
 
-Optional local hooks use the same quality gate, without starting databases or
-browser tests. Install explicitly after checking for any existing hook setup:
+Install the commit hooks to run the same quality checks before committing,
+without starting databases or browser tests. Check for existing hooks first:
 
 ```bash
-go install github.com/evilmartians/lefthook/v2@v2.2.2
-lefthook install
+make hooks-install
 ```
 
-Pre-commit checks staged whitespace without modifying files; pre-push runs
-`make quality`. Hooks are convenience checks; required GitHub CI still decides
-whether a change can merge.
+Pre-commit checks staged whitespace, Go quality, workflow safety and Python
+training lint without modifying files; pre-push repeats language quality.
+Required GitHub CI enforces the same checks even if local hooks are bypassed.
+
+`make training-quality` runs Ruff 0.17.1 with Python 3.10 syntax compatibility.
+`make training-audit` audits every extra in `training/uv.lock` with pip-audit
+2.10.1 on Python 3.11, matching the training CI interpreter. Its marker-selected
+dependency graph is checked on training changes and daily; network or audit
+failures fail the lane. The smoke test executes Go's `ModelFeatureNames` to
+compare the real serving order with Python's feature order.
+
+Review exact pins in `scripts/ci/go-quality.sh` (twin of vidra-core),
+`scripts/ci/workflow-lint.sh` (identical across all three component repos), the
+Makefile's govulncheck and Ruff commands, and `scripts/ci/training-audit.sh`.
+Move the Lefthook pin in `scripts/install-hooks.sh`, the embedded hook command
+and `lefthook.yml` minimum together. The installer preserves custom hooks and
+`core.hooksPath` instead of overwriting another setup.
 
 ## Quick start
 
