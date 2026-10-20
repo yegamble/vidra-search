@@ -111,6 +111,27 @@ A drift guard (`make openapi-verify`) fails the build if the routes registered i
 `/version`, and `/metrics` (`METRICS_ENABLED`) sit at the root and are
 intentionally **not** part of the OpenAPI contract.
 
+## Local quality checks
+
+`make quality` runs non-mutating formatting, vet and Staticcheck 2026.2.2
+(v0.8.2), including tests in both the default and integration builds. It is
+part of the canonical `make ci` gate. `make vuln` also scans test dependencies.
+`make workflow-lint` runs pinned Actionlint and Zizmor; install
+[uv](https://docs.astral.sh/uv/) and ShellCheck for that command. The CI guard
+runs the same command. Review scanner pins when updating the Go toolchain.
+
+Optional local hooks use the same quality gate, without starting databases or
+browser tests. Install explicitly after checking for any existing hook setup:
+
+```bash
+go install github.com/evilmartians/lefthook/v2@v2.2.2
+lefthook install
+```
+
+Pre-commit checks staged whitespace without modifying files; pre-push runs
+`make quality`. Hooks are convenience checks; required GitHub CI still decides
+whether a change can merge.
+
 ## Quick start
 
 **Prerequisites:** Go 1.26 and Docker; `sqlc v1.31.1` for codegen; Python 3.11 +

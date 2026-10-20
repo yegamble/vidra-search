@@ -26,7 +26,7 @@ retiring a lane is a deliberate, diff-visible act, never a quiet deletion.
 
 **`govulncheck` can go red with no change in this repo.** `vuln.yml` runs
 `make vuln` (govulncheck, pinned) on every PR, on main and daily, on the release
-image's Go line. Its scope is exact: it fails when this module's code REACHES a
+image's Go line. Its scope is exact: it includes test code and fails when this module REACHES a
 vulnerable symbol in an advisory curated by vuln.go.dev, and when the scan
 cannot run. Module-level "required but not called" findings are printed
 (`-show verbose`) but informational, and an advisory that exists only as a
@@ -63,7 +63,7 @@ the same `ci-required` job. Fix both repos in the same sweep.
 ## Verification gates (run before opening any PR; paste the output tail into the PR body)
 
 ```
-make ci        # fmt-check, vet, migrate-lint, openapi-verify, sqlc-verify, test-race
+make ci        # quality (fmt, vet, Staticcheck), migrate-lint, OpenAPI, sqlc, race tests
 ```
 
 ## Hard rules

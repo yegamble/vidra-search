@@ -122,7 +122,9 @@ jobs:
           echo "tag=$prev" >> "$GITHUB_OUTPUT"
 
       - name: Check out the previous release into a worktree
-        run: git worktree add ../n-1 "${{ steps.prev.outputs.tag }}"
+        env:
+          PREV_TAG: ${{ steps.prev.outputs.tag }}
+        run: git worktree add ../n-1 "$PREV_TAG"
 
       # THE PROOF. No `migrate up` from HEAD here — the N-1 tree's own migrator
       # runs against the schema the step above left behind, which is bit for bit
@@ -141,24 +143,27 @@ jobs:
       #     failure here is still a failure, and the ledger must survive it.
       - name: The previous release's migrator against the new schema
         working-directory: ${{ github.workspace }}/../n-1
+        env:
+          HEAD_VERSION: ${{ steps.head.outputs.version }}
+          PREV_TAG: ${{ steps.prev.outputs.tag }}
         run: |
           set -euo pipefail
-          head_version='${{ steps.head.outputs.version }}'
+          head_version="$HEAD_VERSION"
 
           # The newest migration N-1 embeds, from its own filenames — the same
           # computation deploy/deploy.sh does, and the only one available on a
           # tree that predates `migrate embedded-max`.
-          prev_max="$(ls migrations/*.up.sql | sed 's#.*/##; s/_.*//' | sort -n | tail -1)"
+          prev_max="$(printf '%s\n' migrations/*.up.sql | sed 's#.*/##; s/_.*//' | sort -n | tail -1)"
           prev_max="$((10#$prev_max))"
-          echo "HEAD ledger=$head_version, ${{ steps.prev.outputs.tag }} embeds up to $prev_max"
+          echo "HEAD ledger=$head_version, ${PREV_TAG} embeds up to $prev_max"
 
           if [ "$head_version" -le "$prev_max" ]; then
-            echo "::notice::HEAD adds no migration beyond ${{ steps.prev.outputs.tag }} (ledger $head_version <= embedded $prev_max), so there is nothing AHEAD of the previous migrator to test. This lane proves nothing on this change by design."
+            echo "::notice::HEAD adds no migration beyond ${PREV_TAG} (ledger $head_version <= embedded $prev_max), so there is nothing AHEAD of the previous migrator to test. This lane proves nothing on this change by design."
             exit 0
           fi
 
           if grep -q 'LedgerAheadMessage' internal/dbmigrate/dbmigrate.go; then
-            echo "${{ steps.prev.outputs.tag }} carries the rollback-floor fix — asserting the no-op."
+            echo "${PREV_TAG} carries the rollback-floor fix — asserting the no-op."
             rc=0
             out="$(go run ./cmd/api migrate up 2>&1)" || rc=$?
             echo "$out"
@@ -171,12 +176,12 @@ jobs:
               *) echo "::error::the previous release's migrator exited 0 but did not report the no-op. It may have APPLIED something." >&2; exit 1 ;;
             esac
           else
-            echo "::notice::${{ steps.prev.outputs.tag }} predates the rollback-floor fix, so its migrator is expected to FAIL here — that failure is exactly what this lane exists to record, and it becomes a hard assertion as soon as a release carries the fix."
+            echo "::notice::${PREV_TAG} predates the rollback-floor fix, so its migrator is expected to FAIL here — that failure is exactly what this lane exists to record, and it becomes a hard assertion as soon as a release carries the fix."
             rc=0
             out="$(go run ./cmd/api migrate up 2>&1)" || rc=$?
             echo "$out"
             if [ "$rc" -eq 0 ]; then
-              echo "::error::${{ steps.prev.outputs.tag }} has no rollback-floor fix but its migrator SUCCEEDED against schema $head_version — the probe above is wrong, or the tag moved. Fix the probe before trusting this lane." >&2
+              echo "::error::${PREV_TAG} has no rollback-floor fix but its migrator SUCCEEDED against schema $head_version — the probe above is wrong, or the tag moved. Fix the probe before trusting this lane." >&2
               exit 1
             fi
             case "$out" in
@@ -189,11 +194,13 @@ jobs:
       # left it: neither a no-op nor a refusal may move or dirty it. Run from
       # HEAD, whose `migrate version` is the one this repo maintains.
       - name: The ledger is unchanged
+        env:
+          HEAD_VERSION: ${{ steps.head.outputs.version }}
         run: |
           set -euo pipefail
           out="$(go run ./cmd/api migrate version)"
           echo "ledger after: $out"
-          want='version=${{ steps.head.outputs.version }} dirty=false table=vidra_search_migrations'
+          want="version=${HEAD_VERSION} dirty=false table=vidra_search_migrations"
           if [ "$out" != "$want" ]; then
             echo "::error::ledger is now '$out', want '$want' — the previous release's migrator moved or dirtied it." >&2
             exit 1
