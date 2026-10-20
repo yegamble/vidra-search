@@ -2,7 +2,7 @@
 name = "vidra-search-training"
 version = "0.1.0"
 description = "Offline model training for vidra-search (LambdaMART ranker; iALS neighbors as future work)."
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
     "lightgbm>=4.0",
     "numpy>=1.24",
