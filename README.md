@@ -128,7 +128,7 @@ make hooks-install
 ```
 
 Pre-commit checks staged whitespace, Go quality, workflow safety and Python
-training lint without modifying files; pre-push repeats language quality.
+training lint without modifying files; pre-push repeats the language and workflow checks.
 Required GitHub CI enforces the same checks even if local hooks are bypassed.
 
 `make training-quality` runs Ruff 0.17.1 with Python 3.10 syntax compatibility.
