@@ -51,6 +51,14 @@ fmt-check: ## Fail if any Go file is not gofmt-clean (CI-safe, non-mutating)
 vet: ## Run go vet
 	go vet ./...
 
+.PHONY: quality
+quality: fmt-check vet ## Static analysis, including unused code and integration-test roots
+	bash scripts/ci/go-quality.sh '' integration
+
+.PHONY: workflow-lint
+workflow-lint: ## Analyze Actions semantics and security (requires Go, uv and ShellCheck)
+	bash scripts/ci/workflow-lint.sh
+
 .PHONY: test
 test: ## Run unit tests
 	go test ./...
@@ -163,9 +171,10 @@ loadtest: ## Drive the suggestions endpoint and report p50/p95/p99 (see scripts/
 
 # govulncheck runs through the module proxy at an EXACT version, so the Go
 # checksum database pins the scanner itself and nothing needs installing. It
-# reports only vulnerabilities reachable from this module's code, against the
+# reports vulnerabilities reachable from this module's code and tests, against the
 # standard library of the toolchain running it — CI runs it on the release
-# image's Go line for that reason. -show verbose prints the "required but not
+# image's Go line for that reason. -test includes CI test dependencies; this is
+# broader than production exposure. -show verbose prints the "required but not
 # called" module findings too: informational, never hidden. Needs network, so
 # it is deliberately NOT part of `make ci`; vuln.yml runs it as its own lane.
 # TWIN: vidra-core and vidra-search carry the same target and the same lane.
@@ -180,9 +189,9 @@ loadtest: ## Drive the suggestions endpoint and report p50/p95/p99 (see scripts/
 GOVULNCHECK_VERSION := v1.8.0
 
 .PHONY: vuln
-vuln: ## Scan for known Go vulnerabilities reachable from this module (needs network; not in `make ci`)
+vuln: ## Scan code and tests for reachable Go vulnerabilities (needs network; not in `make ci`)
 	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) -version   # scanner, Go and database freshness, for the record
-	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) -show verbose ./...
+	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) -test -show verbose ./...
 
 .PHONY: check
 check: fmt vet test ## Run the standard local gate (fmt, vet, test)
@@ -190,5 +199,5 @@ check: fmt vet test ## Run the standard local gate (fmt, vet, test)
 # ci is the single source of truth for the gate. search-ci.yml runs THIS exact
 # target, so "passes locally" == "passes in GitHub". Keep them in lock-step.
 .PHONY: ci
-ci: fmt-check vet migrate-lint openapi-verify sqlc-verify test-race ## Canonical CI gate (run locally to mirror GitHub exactly)
-	@echo "ci: gate passed (fmt-check, vet, migrate-lint, openapi-verify, sqlc-verify, test-race)."
+ci: quality migrate-lint openapi-verify sqlc-verify test-race ## Canonical CI gate (run locally to mirror GitHub exactly)
+	@echo "ci: gate passed (quality, migrate-lint, openapi-verify, sqlc-verify, test-race)."

@@ -27,8 +27,6 @@ const (
 	recWAffinity = 0.6
 	recWChannel  = 0.4
 	recWFresh    = 0.3
-	// recNoveltyPenalty demotes a candidate the user has recently watched.
-	recNoveltyPenalty = 0.5
 	// recMMRLambda trades relevance for topical spread (0.7 ≈ mostly relevance).
 	recMMRLambda = 0.7
 	// recExploreEpsilon is the ε-greedy exploration probability.
@@ -53,7 +51,6 @@ type advCand struct {
 	views      float64
 	ageDays    float64
 	eligible   bool
-	normBase   float64
 	affinity   float64
 	channelAff float64
 }

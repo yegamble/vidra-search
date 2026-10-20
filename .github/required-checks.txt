@@ -13,7 +13,7 @@
 # Nothing but `success` passes: `cancelled`, `timed_out`, `neutral` and
 # `skipped` all fail.
 
-# search-ci.yml — the canonical `make ci` gate + exact module manifest.
+# search-ci.yml — `make ci`, including fmt/vet/Staticcheck and exact modules.
 build-test
 
 # search-integration.yml — `-tags=integration` against real Postgres + Redis,
