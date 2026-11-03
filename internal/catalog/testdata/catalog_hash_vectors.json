@@ -1,0 +1,79 @@
+{
+  "canonicalization": "Decode documents JSON with UseNumber, require EOF, then encoding/json.Marshal (sorted map keys, default HTML escaping). Hash canonical UTF-8 bytes; do not hash typed struct field order.",
+  "document_vectors": [
+    {
+      "name": "exact_integers_html_unicode",
+      "raw_json": "[{\"video\":{\"id\":\"11111111-1111-4111-8111-111111111111\",\"kind\":\"local\",\"privacy\":\"public\",\"state\":\"published\",\"views\":9007199254740993,\"likes\":9223372036854775807,\"title\":\"\u003c\u003e\u0026 café 世界 😀 \\u2028\",\"description\":\"line\\nnext\\t\\\"quoted\\\"\"},\"eligible\":true,\"suppressed_reason\":null}]",
+      "canonical_json": "[{\"eligible\":true,\"suppressed_reason\":null,\"video\":{\"description\":\"line\\nnext\\t\\\"quoted\\\"\",\"id\":\"11111111-1111-4111-8111-111111111111\",\"kind\":\"local\",\"likes\":9223372036854775807,\"privacy\":\"public\",\"state\":\"published\",\"title\":\"\\u003c\\u003e\\u0026 café 世界 😀 \\u2028\",\"views\":9007199254740993}}]",
+      "sha256": "36ddea761145a2ccfc54f3ba01f9d2eca4ef5b30d7fc603e1e8e49b3d67235d6"
+    },
+    {
+      "name": "same_values_reordered_keys",
+      "raw_json": "[{\"suppressed_reason\":null,\"eligible\":true,\"video\":{\"description\":\"line\\nnext\\t\\\"quoted\\\"\",\"title\":\"\u003c\u003e\u0026 café 世界 😀 \\u2028\",\"likes\":9223372036854775807,\"views\":9007199254740993,\"state\":\"published\",\"privacy\":\"public\",\"kind\":\"local\",\"id\":\"11111111-1111-4111-8111-111111111111\"}}]",
+      "canonical_json": "[{\"eligible\":true,\"suppressed_reason\":null,\"video\":{\"description\":\"line\\nnext\\t\\\"quoted\\\"\",\"id\":\"11111111-1111-4111-8111-111111111111\",\"kind\":\"local\",\"likes\":9223372036854775807,\"privacy\":\"public\",\"state\":\"published\",\"title\":\"\\u003c\\u003e\\u0026 café 世界 😀 \\u2028\",\"views\":9007199254740993}}]",
+      "sha256": "36ddea761145a2ccfc54f3ba01f9d2eca4ef5b30d7fc603e1e8e49b3d67235d6"
+    },
+    {
+      "name": "optional_language_null",
+      "raw_json": "[{\"eligible\":true,\"suppressed_reason\":null,\"video\":{\"id\":\"22222222-2222-4222-8222-222222222222\",\"kind\":\"local\",\"privacy\":\"public\",\"state\":\"published\",\"language\":null}}]",
+      "canonical_json": "[{\"eligible\":true,\"suppressed_reason\":null,\"video\":{\"id\":\"22222222-2222-4222-8222-222222222222\",\"kind\":\"local\",\"language\":null,\"privacy\":\"public\",\"state\":\"published\"}}]",
+      "sha256": "e2b3dbf5d0384e2706be9b2b27d5e810b24924a2dbfb11e59161f370e37a571f"
+    },
+    {
+      "name": "optional_language_absent",
+      "raw_json": "[{\"eligible\":true,\"suppressed_reason\":null,\"video\":{\"id\":\"22222222-2222-4222-8222-222222222222\",\"kind\":\"local\",\"privacy\":\"public\",\"state\":\"published\"}}]",
+      "canonical_json": "[{\"eligible\":true,\"suppressed_reason\":null,\"video\":{\"id\":\"22222222-2222-4222-8222-222222222222\",\"kind\":\"local\",\"privacy\":\"public\",\"state\":\"published\"}}]",
+      "sha256": "6ceaf1d02ec10289d56614e9aa05e7722910a2c5203acf71b3be7a966c8653c4"
+    },
+    {
+      "name": "empty_array_hash_only_not_valid_page",
+      "raw_json": "[]",
+      "canonical_json": "[]",
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    }
+  ],
+  "empty_manifest": {
+    "document_count": 0,
+    "hash_input_utf8": "",
+    "membership_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "page_count": 0,
+    "pages_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "equal_document_pairs": [
+    [
+      "exact_integers_html_unicode",
+      "same_values_reordered_keys"
+    ]
+  ],
+  "go_version": "go1.27.3",
+  "membership": {
+    "hash_input_utf8": "11111111-1111-4111-8111-111111111111\n22222222-2222-4222-8222-222222222222\n",
+    "membership_sha256": "be2001bca1476f8f8480dd7db6264be12c94cb7be24332f370976c1ebc46e729",
+    "sorted_ids": [
+      "11111111-1111-4111-8111-111111111111",
+      "22222222-2222-4222-8222-222222222222"
+    ]
+  },
+  "page_aggregate": {
+    "hash_input_utf8": "0:36ddea761145a2ccfc54f3ba01f9d2eca4ef5b30d7fc603e1e8e49b3d67235d6\n1:e2b3dbf5d0384e2706be9b2b27d5e810b24924a2dbfb11e59161f370e37a571f\n",
+    "pages": [
+      {
+        "content_sha256": "e2b3dbf5d0384e2706be9b2b27d5e810b24924a2dbfb11e59161f370e37a571f",
+        "page_index": 1
+      },
+      {
+        "content_sha256": "36ddea761145a2ccfc54f3ba01f9d2eca4ef5b30d7fc603e1e8e49b3d67235d6",
+        "page_index": 0
+      }
+    ],
+    "pages_sha256": "4b2e668cfcde550d10cab99b8e2538ded819ba89debcdcf6b9786d6b45f36d4b"
+  },
+  "protocol": "vidra-catalog-v2-go-json-hashes",
+  "scope": "Hash-function vectors, not complete route/business-validation fixtures. Empty documents array is not a valid snapshot page.",
+  "unequal_document_pairs": [
+    [
+      "optional_language_null",
+      "optional_language_absent"
+    ]
+  ]
+}
