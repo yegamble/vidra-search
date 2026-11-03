@@ -67,8 +67,13 @@ func StageCatalogPage(ctx context.Context, tx pgx.Tx, identity catalog.Identity,
 		Scan(&charged, &expectedPages, &expectedCount, &pages, &count); err != nil {
 		return err
 	}
-	if charged+int64(len(canonical)) > catalog.MaxSnapshotBytes || count+int64(len(ids)) > catalog.MaxDocuments || pages+1 > catalog.MaxPages {
-		return ErrCatalogQuota
+	switch {
+	case charged+int64(len(canonical)) > catalog.MaxSnapshotBytes:
+		return fmt.Errorf("%w: canonical bytes", ErrCatalogQuota)
+	case count+int64(len(ids)) > catalog.MaxDocuments:
+		return fmt.Errorf("%w: document count", ErrCatalogQuota)
+	case pages+1 > catalog.MaxPages:
+		return fmt.Errorf("%w: page count", ErrCatalogQuota)
 	}
 	if expectedPages != nil && (page.PageIndex >= *expectedPages || count+int64(len(ids)) > *expectedCount) {
 		return fmt.Errorf("%w: page exceeds declared manifest", ErrCatalogConflict)
