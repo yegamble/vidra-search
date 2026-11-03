@@ -62,7 +62,7 @@ func TestCatalogPageStagingIsImmutableAndChargesDistinctCanonicalArrays(t *testi
 		index      int32
 		raw        []byte
 		hash       string
-	}{{1, 0, b, hashB}, {1, 1, a, hashA}, {2, 0, foreign, foreignHash}} {
+	}{{1, 0, b, hashB}, {1, 1, a, hashA}, {1, 3, a, hashB}, {2, 0, foreign, foreignHash}} {
 		if err := put(attempt.generation, attempt.index, attempt.raw, attempt.hash); !errors.Is(err, store.ErrCatalogConflict) {
 			t.Fatalf("accepted conflict: %v", err)
 		}
@@ -105,5 +105,10 @@ func TestCatalogPageStagingIsImmutableAndChargesDistinctCanonicalArrays(t *testi
 	}
 	if row, err := env.store.Queries().GetDocument(ctx, remote.ID); err != nil || !row.Eligible || row.Kind != "remote" {
 		t.Fatalf("staging changed remote projection: %+v, %v", row, err)
+	}
+	var completed, localRows int64
+	if err := env.store.Pool.QueryRow(ctx, `SELECT completed_generation,
+		(SELECT count(*) FROM search.documents WHERE kind='local') FROM search.catalog_scopes`).Scan(&completed, &localRows); err != nil || completed != 0 || localRows != 0 {
+		t.Fatalf("staging changed live authority: %d/%d, %v", completed, localRows, err)
 	}
 }
