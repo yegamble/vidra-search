@@ -86,8 +86,10 @@ func TestCatalogPageValidatesEachCanonicalDocumentBeforeHashing(t *testing.T) {
 		rehash(strings.Replace(string(page), `"eligible":true`, `"eligible":true,"Eligible":true`, 1)),
 		rehash(strings.Replace(string(page), `"suppressed_reason":null`, `"suppressed_reason":"hidden"`, 1)),
 		[]byte(strings.Replace(string(page), `"page_index":0`, `"page_index":-1`, 1)),
+		[]byte(strings.Replace(string(page), `"page_index":0`, `"page_index":1024`, 1)),
 		[]byte(strings.Replace(string(page), `"page_index":0,`, ``, 1)),
 		[]byte(strings.Replace(string(page), got.ContentSHA256, strings.Repeat("0", 64), 1)),
+		[]byte(strings.Repeat(" ", catalog.MaxRequestBytes) + string(page)),
 	} {
 		if _, err := parseCatalogPage(bad); err == nil {
 			t.Errorf("accepted invalid page %s", bad)

@@ -27,7 +27,13 @@ func parseCatalogEnd(raw []byte) (catalogEnd, error) {
 	if err := validateCatalogIdentity(end.Identity, fields); err != nil {
 		return end, err
 	}
-	return end, end.Manifest.Validate()
+	if err := end.Manifest.Validate(); err != nil {
+		return end, err
+	}
+	if end.PageCount > catalog.MaxPages || end.DocumentCount > catalog.MaxDocuments {
+		return end, fmt.Errorf("catalog: manifest exceeds pending quota")
+	}
+	return end, nil
 }
 
 func validateCatalogIdentity(id catalog.Identity, fields map[string]json.RawMessage) error {
@@ -60,6 +66,9 @@ type catalogPage struct {
 
 func parseCatalogPage(raw []byte) (catalogPage, error) {
 	var page catalogPage
+	if len(raw) > catalog.MaxRequestBytes {
+		return page, fmt.Errorf("catalog: page exceeds request byte budget")
+	}
 	fields, err := catalog.ObjectFields(raw, []string{"scope", "epoch", "generation",
 		"page_index", "documents", "content_sha256"}, nil)
 	if err != nil {
@@ -75,11 +84,11 @@ func parseCatalogPage(raw []byte) (catalogPage, error) {
 	if err := validateCatalogIdentity(wire.Identity, fields); err != nil {
 		return page, err
 	}
-	if wire.PageIndex < 0 {
-		return page, fmt.Errorf("catalog: negative page index")
+	if wire.PageIndex < 0 || wire.PageIndex >= catalog.MaxPages {
+		return page, fmt.Errorf("catalog: page index outside pending quota")
 	}
 	var documents []json.RawMessage
-	if err := json.Unmarshal(fields["documents"], &documents); err != nil || len(documents) == 0 {
+	if err := json.Unmarshal(fields["documents"], &documents); err != nil || len(documents) == 0 || len(documents) > catalog.MaxDocuments {
 		return page, fmt.Errorf("catalog: page requires nonempty documents")
 	}
 	seen := make(map[uuid.UUID]bool, len(documents))
@@ -91,10 +100,9 @@ func parseCatalogPage(raw []byte) (catalogPage, error) {
 		}
 		videoFields, err := catalog.ObjectFields(documentFields["video"], []string{
 			"id", "kind", "channel_id", "channel_handle", "channel_name", "owner_id", "title", "description",
-			"tags", "category", "language", "license", "duration_seconds", "is_sensitive", "privacy", "state",
-			"published_at", "created_at", "updated_at", "views", "likes",
-		}, []string{"channel_id", "channel_handle", "channel_name", "owner_id", "tags", "category", "language",
-			"license", "duration_seconds", "published_at", "created_at", "updated_at"})
+			"tags", "is_sensitive", "privacy", "state", "created_at", "updated_at", "views", "likes",
+		}, []string{"channel_id", "channel_handle", "channel_name", "owner_id", "tags", "created_at", "updated_at"},
+			"category", "language", "license", "duration_seconds", "published_at")
 		if err != nil {
 			return page, err
 		}

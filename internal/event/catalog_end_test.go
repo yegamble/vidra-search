@@ -13,6 +13,10 @@ func TestCatalogEndRequiresExactFenceAndExplicitManifest(t *testing.T) {
 	if err != nil || int64(got.Generation) != 9007199254740993 || got.PageCount != 0 {
 		t.Fatalf("valid empty full = %+v, %v", got, err)
 	}
+	bounded := strings.Replace(strings.Replace(validCatalogEnd, `"page_count":0`, `"page_count":1024`, 1), `"document_count":0`, `"document_count":100000`, 1)
+	if _, err := parseCatalogEnd([]byte(bounded)); err != nil {
+		t.Fatal(err)
+	}
 	var valid map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(validCatalogEnd), &valid); err != nil {
 		t.Fatal(err)
@@ -42,6 +46,8 @@ func TestCatalogEndRequiresExactFenceAndExplicitManifest(t *testing.T) {
 		strings.Replace(validCatalogEnd, `"page_count":0`, `"page_count":1e0`, 1),
 		strings.Replace(validCatalogEnd, `"page_count":0`, `"page_count":1`, 1),
 		strings.Replace(validCatalogEnd, `"page_count":0`, `"page_count":-1`, 1),
+		strings.Replace(bounded, `"page_count":1024`, `"page_count":1025`, 1),
+		strings.Replace(bounded, `"document_count":100000`, `"document_count":100001`, 1),
 		strings.Replace(validCatalogEnd, `"scope":"local"`, `"scope":"local","Scope":"local"`, 1),
 		strings.Replace(validCatalogEnd, `"scope":"local"`, `"scope":"local","scope":"local"`, 1),
 		validCatalogEnd + `{}`,
