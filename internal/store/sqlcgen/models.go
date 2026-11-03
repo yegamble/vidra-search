@@ -56,6 +56,8 @@ type SearchCatalogSnapshot struct {
 	DocumentCount    *int64    `json:"document_count"`
 	MembershipSha256 *string   `json:"membership_sha256"`
 	PagesSha256      *string   `json:"pages_sha256"`
+	// Sum of canonical documents JSON array byte lengths for distinct pending pages; duplicates add zero.
+	CanonicalBytes int64 `json:"canonical_bytes"`
 }
 
 type SearchCatalogSnapshotPage struct {
