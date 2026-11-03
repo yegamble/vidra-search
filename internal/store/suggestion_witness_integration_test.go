@@ -6,6 +6,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/vidra/vidra-search/internal/event"
 	"github.com/vidra/vidra-search/internal/ranking"
 	"github.com/vidra/vidra-search/internal/suggest"
@@ -22,11 +24,14 @@ func TestIntegrationDocumentSuggestionWitnessesSurviveCache(t *testing.T) {
 	}
 	low := makeDoc("first unrelated title", "aaa", 10)
 	high := makeDoc("second unrelated title", "zzz", 100)
+	high.ID = uuid.MustParse("00000000-0000-0000-0000-000000000001")
+	tied := makeDoc("tied unrelated title", "middle", 100)
+	tied.ID = uuid.MustParse("00000000-0000-0000-0000-000000000002")
 	private := makeDoc("private unrelated title", "private", 9000)
 	private.Privacy = "private"
 	sensitive := makeDoc("sensitive unrelated title", "sensitive", 500)
 	sensitive.IsSensitive = true
-	ingest(t, env, upsertEnvelope(t, low), upsertEnvelope(t, high),
+	ingest(t, env, upsertEnvelope(t, low), upsertEnvelope(t, high), upsertEnvelope(t, tied),
 		upsertEnvelope(t, private), upsertEnvelope(t, sensitive))
 	request := suggest.Request{Query: "wi", Limit: 20, HideSensitive: true}
 	check := func(response suggest.Response) {

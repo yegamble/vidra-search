@@ -16,33 +16,52 @@ LIMIT @lim::int;
 
 -- name: SuggestChannelPrefix :many
 -- Keep the label, handle and representative identifier on the same source row.
-SELECT channel_name, channel_handle, views, video_id
+-- Limit groups first so indexed representative lookups stay bounded by @lim.
+SELECT candidates.channel_name, COALESCE(witness.channel_handle, '')::text AS channel_handle,
+       candidates.views, witness.video_id
 FROM (
-    SELECT DISTINCT ON (d.channel_name) d.channel_name,
-           COALESCE(d.channel_handle, '')::text AS channel_handle, d.views, d.video_id
+    SELECT d.channel_name, max(d.views)::bigint AS views
     FROM search.documents d
     WHERE d.eligible
       AND (NOT @hide_sensitive::bool OR NOT d.is_sensitive)
       AND d.channel_name IS NOT NULL
       AND lower(d.channel_name) LIKE @prefix::text
-    ORDER BY d.channel_name, d.views DESC, d.video_id
+    GROUP BY d.channel_name
+    ORDER BY views DESC, d.channel_name
+    LIMIT @lim::int
 ) candidates
-ORDER BY views DESC, channel_name, video_id
-LIMIT @lim::int;
+CROSS JOIN LATERAL (
+    SELECT d.video_id, d.channel_handle
+    FROM search.documents d
+    WHERE d.eligible AND (NOT @hide_sensitive::bool OR NOT d.is_sensitive)
+      AND lower(d.channel_name) = lower(candidates.channel_name)
+      AND d.channel_name = candidates.channel_name AND d.views = candidates.views
+    ORDER BY d.video_id
+    LIMIT 1
+) witness
+ORDER BY candidates.views DESC, candidates.channel_name, witness.video_id;
 
 -- name: SuggestTagPrefix :many
-SELECT tag, cnt, video_id
+SELECT candidates.tag, candidates.cnt, witness.video_id
 FROM (
-    SELECT DISTINCT ON (t.tag) t.tag::text AS tag,
-           count(*) OVER (PARTITION BY t.tag)::bigint AS cnt, d.video_id
+    SELECT t.tag::text AS tag, count(*)::bigint AS cnt
     FROM search.documents d, unnest(d.tags) AS t(tag)
     WHERE d.eligible
       AND (NOT @hide_sensitive::bool OR NOT d.is_sensitive)
       AND lower(t.tag) LIKE @prefix::text
-    ORDER BY t.tag, d.views DESC, d.video_id
+    GROUP BY t.tag
+    ORDER BY cnt DESC, t.tag
+    LIMIT @lim::int
 ) candidates
-ORDER BY cnt DESC, tag
-LIMIT @lim::int;
+CROSS JOIN LATERAL (
+    SELECT d.video_id
+    FROM search.documents d
+    WHERE d.eligible AND (NOT @hide_sensitive::bool OR NOT d.is_sensitive)
+      AND d.tags @> ARRAY[candidates.tag]
+    ORDER BY d.views DESC, d.video_id
+    LIMIT 1
+) witness
+ORDER BY candidates.cnt DESC, candidates.tag;
 
 -- name: SuggestAggregatePrefix :many
 -- The global-popularity suggestion stream (§1.6a): suggestible, non-banned
