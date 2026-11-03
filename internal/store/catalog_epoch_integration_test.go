@@ -14,7 +14,10 @@ func TestCatalogEpochSchemaRetainsFencesWithoutInbox(t *testing.T) {
 	ctx := context.Background()
 	q := env.store.Pool
 	t.Cleanup(func() {
-		_, _ = q.Exec(ctx, `TRUNCATE search.catalog_scopes, search.catalog_epochs`)
+		if _, err := q.Exec(ctx, `TRUNCATE search.catalog_snapshot_pages,
+			search.catalog_snapshots, search.catalog_scopes, search.catalog_epochs`); err != nil {
+			t.Errorf("catalog cleanup: %v", err)
+		}
 	})
 	epoch := uuid.New()
 	if _, err := q.Exec(ctx, `INSERT INTO search.catalog_epochs(scope, epoch) VALUES ('local', $1)`, epoch); err != nil {
