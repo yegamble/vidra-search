@@ -83,7 +83,7 @@ func TestCatalogActivationIsAtomicLocalExactAndPreservesExistingCounters(t *test
 		(SELECT title='canonical title' AND views=42 AND eligible FROM search.documents WHERE video_id=$1)
 		AND (SELECT views=7 AND eligible AND cardinality(tags)=0 FROM search.documents WHERE video_id=$2)
 		AND (SELECT NOT eligible AND suppressed_reason='catalog_orphan' FROM search.documents WHERE video_id=$3)
-		AND (SELECT NOT eligible AND suppressed_reason='private' FROM search.documents WHERE video_id=$4)
+		AND (SELECT NOT eligible AND suppressed_reason='privacy_private' FROM search.documents WHERE video_id=$4)
 		AND (SELECT eligible AND kind='remote' FROM search.documents WHERE video_id=$5)
 		AND (SELECT completed_generation=1 FROM search.catalog_scopes)
 		AND NOT EXISTS(SELECT 1 FROM search.catalog_snapshots)`, keep.ID, added.ID, orphan.ID, hidden.ID, remote.ID).Scan(&correct); err != nil || !correct {
