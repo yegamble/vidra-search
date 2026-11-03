@@ -74,13 +74,14 @@ func TestCatalogActivationIsAtomicLocalExactAndPreservesExistingCounters(t *test
 	keep.Title, keep.Views = "canonical title", 7
 	added := video("new seed")
 	added.Views = 7
+	added.Tags, added.UpdatedAt = nil, nil // Normalize nullable tags and use created_at evidence.
 	if err := full(1, []event.VideoDoc{keep, added}, true); err != nil {
 		t.Fatal(err)
 	}
 	var correct bool
 	if err := env.store.Pool.QueryRow(ctx, `SELECT
 		(SELECT title='canonical title' AND views=42 AND eligible FROM search.documents WHERE video_id=$1)
-		AND (SELECT views=7 AND eligible FROM search.documents WHERE video_id=$2)
+		AND (SELECT views=7 AND eligible AND cardinality(tags)=0 FROM search.documents WHERE video_id=$2)
 		AND (SELECT NOT eligible AND suppressed_reason='catalog_orphan' FROM search.documents WHERE video_id=$3)
 		AND (SELECT NOT eligible AND suppressed_reason='private' FROM search.documents WHERE video_id=$4)
 		AND (SELECT eligible AND kind='remote' FROM search.documents WHERE video_id=$5)
@@ -89,6 +90,8 @@ func TestCatalogActivationIsAtomicLocalExactAndPreservesExistingCounters(t *test
 		t.Fatalf("incorrect activated projection: %v/%v", correct, err)
 	}
 	// Repeated frozen metadata must neither rewrite the row nor overwrite counters.
+	// This injects the receiver boundary; core does not currently emit stats.
+	ingest(t, env, rawEnvelope(t, event.TypeVideoStats, map[string]any{"video_id": keep.ID, "views": 57, "likes": 3}))
 	var before, after string
 	if err := env.store.Pool.QueryRow(ctx, `SELECT xmin::text FROM search.documents WHERE video_id=$1`, keep.ID).Scan(&before); err != nil {
 		t.Fatal(err)
@@ -98,6 +101,9 @@ func TestCatalogActivationIsAtomicLocalExactAndPreservesExistingCounters(t *test
 	}
 	if err := env.store.Pool.QueryRow(ctx, `SELECT xmin::text FROM search.documents WHERE video_id=$1`, keep.ID).Scan(&after); err != nil || before != after {
 		t.Fatalf("unchanged row rewritten: %s/%s %v", before, after, err)
+	}
+	if err := env.store.Pool.QueryRow(ctx, `SELECT views=57 AND likes=3 FROM search.documents WHERE video_id=$1`, keep.ID).Scan(&correct); err != nil || !correct {
+		t.Fatalf("existing counters overwritten: %v/%v", correct, err)
 	}
 	// Ownership can change after staging. Recheck at activation before any write.
 	collision := video("late ownership collision")
