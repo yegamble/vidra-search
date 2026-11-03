@@ -23,18 +23,20 @@ func TestCatalogEpochCASRetainsHistoryAndRequiresOriginalPredecessor(t *testing.
 		}
 	}
 	a, b, c := uuid.New(), uuid.New(), uuid.New()
+	doc := video("projection survives explicit epoch reset")
+	ingest(t, env, upsertEnvelope(t, doc))
 	set(a, nil, false)
 	set(a, nil, false)
 	set(a, &a, true)
 	set(b, nil, true)
-	doc := video("projection survives explicit epoch reset")
-	ingest(t, env, upsertEnvelope(t, doc))
 	const empty = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 	if _, err := env.store.Pool.Exec(ctx, `UPDATE search.catalog_scopes
 		SET highest_observed_generation=11, completed_generation=7, completed_at=now(),
-		completed_membership_sha256=$1, completed_pages_sha256=$1;
-		INSERT INTO search.catalog_snapshots(scope, epoch, generation)
-		SELECT scope, epoch, 11 FROM search.catalog_scopes`, empty); err != nil {
+		completed_membership_sha256=$1, completed_pages_sha256=$1`, empty); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.store.Pool.Exec(ctx, `INSERT INTO search.catalog_snapshots(scope, epoch, generation)
+		SELECT scope, epoch, 11 FROM search.catalog_scopes`); err != nil {
 		t.Fatal(err)
 	}
 	set(b, &a, false)
