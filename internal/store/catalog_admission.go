@@ -49,7 +49,7 @@ func AdmitCatalogGeneration(ctx context.Context, tx pgx.Tx, identity catalog.Ide
 		var pending bool
 		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM search.catalog_snapshots
 			WHERE scope=$1 AND epoch=$2 AND generation=$3
-			AND created_at > now() - interval '24 hours')`, identity.Scope, epoch, generation).Scan(&pending); err != nil {
+			AND created_at > clock_timestamp() - interval '24 hours')`, identity.Scope, epoch, generation).Scan(&pending); err != nil {
 			return err
 		}
 		if !pending {
