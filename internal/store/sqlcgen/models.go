@@ -25,6 +25,28 @@ type SearchBehaviorEvent struct {
 	Props           []byte      `json:"props"`
 }
 
+// Permanent epoch/predecessor history; never pruned with inbox or staged payloads.
+type SearchCatalogEpoch struct {
+	Scope       string      `json:"scope"`
+	Epoch       uuid.UUID   `json:"epoch"`
+	Predecessor pgtype.UUID `json:"predecessor"`
+	CreatedAt   time.Time   `json:"created_at"`
+}
+
+// Permanent completed-full authority and manifest. Restore must preserve producer and receiver state consistently.
+type SearchCatalogScope struct {
+	Scope string    `json:"scope"`
+	Epoch uuid.UUID `json:"epoch"`
+	// Admission/expiry fence only. Staging cannot establish catalog completeness.
+	HighestObservedGeneration int64              `json:"highest_observed_generation"`
+	CompletedGeneration       int64              `json:"completed_generation"`
+	CompletedAt               pgtype.Timestamptz `json:"completed_at"`
+	CompletedPageCount        int32              `json:"completed_page_count"`
+	CompletedDocumentCount    int64              `json:"completed_document_count"`
+	CompletedMembershipSha256 *string            `json:"completed_membership_sha256"`
+	CompletedPagesSha256      *string            `json:"completed_pages_sha256"`
+}
+
 // RETIRED (0017): no longer read or written. See search.co_watch -- same story for the co-search half of the blend.
 type SearchCoSearch struct {
 	VideoA    uuid.UUID `json:"video_a"`
