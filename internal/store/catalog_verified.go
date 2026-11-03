@@ -14,7 +14,6 @@ import (
 // VerifiedCatalogSnapshot is pending evidence only, not completed authority.
 type VerifiedCatalogSnapshot struct {
 	manifest catalog.Manifest
-	pages    []catalog.SnapshotPage
 }
 
 // LoadVerifiedCatalogSnapshot reads current pending evidence under the catalog
@@ -73,20 +72,21 @@ func LoadVerifiedCatalogSnapshot(ctx context.Context, tx pgx.Tx, id catalog.Iden
 		return nil, err
 	}
 	defer rows.Close()
+	var pages []catalog.SnapshotPage
 	for rows.Next() {
 		var page catalog.SnapshotPage
 		if err := rows.Scan(&page.PageIndex, &page.Documents, &page.DocumentCount, &page.ContentSHA256); err != nil {
 			return nil, err
 		}
-		snapshot.pages = append(snapshot.pages, page)
+		pages = append(pages, page)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	if len(snapshot.pages) < int(snapshot.manifest.PageCount) {
+	if len(pages) < int(snapshot.manifest.PageCount) {
 		return nil, nil
 	}
-	if err := catalog.VerifySnapshot(snapshot.manifest, snapshot.pages, charged); err != nil {
+	if err := catalog.VerifySnapshot(snapshot.manifest, pages, charged); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrCatalogConflict, err)
 	}
 	return snapshot, nil
