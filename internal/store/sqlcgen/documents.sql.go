@@ -186,21 +186,6 @@ func (q *Queries) SuppressOwnerDocuments(ctx context.Context, arg SuppressOwnerD
 	return err
 }
 
-const suppressReconcileOrphans = `-- name: SuppressReconcileOrphans :exec
-UPDATE search.documents
-SET eligible = false, suppressed_reason = 'reconcile_orphan', indexed_at = now()
-WHERE kind = 'local'
-  AND eligible
-  AND reconcile_run_id IS DISTINCT FROM $1
-`
-
-// After reconcile.end: hide eligible LOCAL documents the current run never
-// stamped — they no longer exist (or are no longer public) at the source.
-func (q *Queries) SuppressReconcileOrphans(ctx context.Context, reconcileRunID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, suppressReconcileOrphans, reconcileRunID)
-	return err
-}
-
 const updateChannelDocuments = `-- name: UpdateChannelDocuments :exec
 UPDATE search.documents
 SET channel_handle = $1,
@@ -308,8 +293,8 @@ type UpsertDocumentParams struct {
 // Insert or refresh a document from a video.upsert (or reconcile.page) event.
 // eligible + suppressed_reason are derived in Go from privacy/state. On a
 // reconcile page the caller passes reconcile_run_id to stamp the row; on a
-// normal upsert it passes NULL and the existing stamp is preserved (COALESCE),
-// so a later reconcile.end only suppresses rows the current run never touched.
+// normal upsert it passes NULL and the existing stamp is preserved (COALESCE).
+// This legacy stamp is diagnostic only; an end receipt cannot prove membership.
 func (q *Queries) UpsertDocument(ctx context.Context, arg UpsertDocumentParams) error {
 	_, err := q.db.Exec(ctx, upsertDocument,
 		arg.VideoID,

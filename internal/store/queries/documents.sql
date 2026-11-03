@@ -2,8 +2,8 @@
 -- Insert or refresh a document from a video.upsert (or reconcile.page) event.
 -- eligible + suppressed_reason are derived in Go from privacy/state. On a
 -- reconcile page the caller passes reconcile_run_id to stamp the row; on a
--- normal upsert it passes NULL and the existing stamp is preserved (COALESCE),
--- so a later reconcile.end only suppresses rows the current run never touched.
+-- normal upsert it passes NULL and the existing stamp is preserved (COALESCE).
+-- This legacy stamp is diagnostic only; an end receipt cannot prove membership.
 INSERT INTO search.documents (
     video_id, kind, channel_id, channel_handle, channel_name, owner_id,
     title, description, tags, category, language, license, duration_seconds,
@@ -85,15 +85,6 @@ WHERE owner_id = @owner_id AND eligible;
 UPDATE search.documents
 SET eligible = true, suppressed_reason = NULL, indexed_at = now()
 WHERE owner_id = @owner_id AND suppressed_reason = @reason;
-
--- name: SuppressReconcileOrphans :exec
--- After reconcile.end: hide eligible LOCAL documents the current run never
--- stamped — they no longer exist (or are no longer public) at the source.
-UPDATE search.documents
-SET eligible = false, suppressed_reason = 'reconcile_orphan', indexed_at = now()
-WHERE kind = 'local'
-  AND eligible
-  AND reconcile_run_id IS DISTINCT FROM @reconcile_run_id;
 
 -- name: GetDocument :one
 SELECT video_id, kind, channel_id, channel_handle, channel_name, owner_id,

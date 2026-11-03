@@ -30,7 +30,8 @@ All metrics use the `vidra_search_` prefix on a private registry:
   candidates rejected, `reason ∈ {distinct_users, wilson_min_volume}`. A high
   ratio is expected and healthy (the gates are doing their job).
 - `vidra_search_reconcile_age_seconds` — seconds since the last `reconcile.end`
-  (`-1` if none on record). Alert if it exceeds ~48h.
+  receipt (`-1` if none on record). Alert if it exceeds ~48h. This measures
+  delivery activity, not verified catalog completeness.
 - `vidra_search_table_rows{table}` — approximate row counts (planner statistics)
   for the search schema, sampled at scrape time.
 
@@ -71,7 +72,7 @@ Copy-paste queries for the critical signals (dashboards + alert rules). All
   is wedged (check `worker_errors_total`).
 - **Index freshness** — staleness of the document index vs the source catalogue:
   ```promql
-  vidra_search_reconcile_age_seconds                 # seconds since last reconcile.end; alert > 48h (172800)
+  vidra_search_reconcile_age_seconds                 # seconds since last legacy end receipt; alert > 48h (172800)
   vidra_search_documents{eligible="true"}            # eligible corpus size; alert on a sharp drop
   ```
 - **Unsafe-impression proxy.** Per-viewer visibility (mutes/blocks/sensitivity) is
@@ -140,7 +141,7 @@ are idempotent.
 - `retention` (24h) — deletes aged events, prunes the inbox + low-weight
   projections.
 - `reconcile_guard` (10m) — warns + sets the reconcile-age gauge when no
-  `reconcile.end` has arrived within `~48h`.
+  `reconcile.end` receipt has arrived within `~48h`. It does not verify completeness.
 - `suggestible_reeval` (24h) — recomputes `query_aggregates.suggestible` AND the
   popularity counters (`total_count`, `decayed_freq`, `first_seen`, `last_seen`)
   for EVERY row against the surviving `query_log`, not just rows with new
@@ -271,15 +272,21 @@ sustained; do alert on `readyz` flapping and on a rising event `failed` rate.
 
 vidra-core periodically re-sends the full eligible catalog as
 `reconcile.begin` → `reconcile.page`* → `reconcile.end`, stamping every touched
-document with the run's `reconcile_run_id`. On `reconcile.end`, any eligible
-LOCAL document NOT stamped by the current run is suppressed with reason
-`reconcile_orphan` — this is how deletions/unpublishes that missed their
-individual event are eventually reconciled.
+document with the run's `reconcile_run_id`. Pages refresh documents, but a legacy
+end is only a receipt. It cannot prove that all pages arrived or that a document
+omitted by one run was not published during another. Ends therefore leave
+document eligibility unchanged, including when runs overlap or delivery retries.
 
-- If reconciliation stops (no `reconcile.end` for a long window), the index can
+Individual suppression events still hide documents. Repairing missed deletions
+requires verified, atomic full-snapshot activation; the dormant catalog schema
+and hash helpers alone do not provide that protocol. Until it is implemented
+and qualified, legacy reconciliation cannot establish catalog completeness.
+
+- If reconciliation stops (no end receipt for a long window), the index can
   drift stale. The `reconcile_guard` worker (W2) sets
   `vidra_search_reconcile_age_seconds` and logs a warning past ~48h; also watch
-  the `vidra_search_documents` gauge against the expected catalog size.
+  the `vidra_search_documents` gauge against the expected catalog size. Neither
+  the age nor a matching count proves exact membership.
 
 ## Model registry & rollback (W3)
 
