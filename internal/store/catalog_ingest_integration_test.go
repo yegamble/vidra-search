@@ -82,4 +82,20 @@ func TestCatalogIngestRevalidatesReplayAndRollsBackFailedAdmission(t *testing.T)
 		AND (SELECT count(*)=2 FROM search.events_inbox) FROM search.catalog_scopes`).Scan(&intact); err != nil || !intact {
 		t.Fatalf("completion or inbox boundary incorrect: %v/%v", intact, err)
 	}
+	var nextEnd map[string]any
+	if err := json.Unmarshal(end.Payload, &nextEnd); err != nil {
+		t.Fatal(err)
+	}
+	nextEnd["generation"] = "2"
+	end.Payload, _ = json.Marshal(nextEnd)
+	end.EventID = uuid.New()
+	apply(1, 0, end) // Reordered end cannot publish authority before its page.
+	if err := env.store.Pool.QueryRow(ctx, `SELECT completed_generation=1 AND highest_observed_generation=2
+		FROM search.catalog_scopes`).Scan(&intact); err != nil || !intact {
+		t.Fatalf("early end became authority: %v/%v", intact, err)
+	}
+	apply(1, 0, page("2", v))
+	if err := env.store.Pool.QueryRow(ctx, `SELECT completed_generation=2 FROM search.catalog_scopes`).Scan(&intact); err != nil || !intact {
+		t.Fatalf("last reordered page did not complete: %v/%v", intact, err)
+	}
 }
