@@ -17,6 +17,7 @@ var ErrCatalogConflict = errors.New("catalog authority conflict")
 // LockCatalog serializes initialization, activation and legacy write admission.
 // It is transaction-scoped so a pre-initialization writer cannot commit after
 // an epoch becomes authoritative. Callers must not hold it across network I/O.
+// Use READ COMMITTED so queries after waiting observe the lock holder's commit.
 func LockCatalog(ctx context.Context, tx pgx.Tx) error {
 	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, int64(0x7669647261636174))
 	return err
@@ -29,7 +30,7 @@ func (s *Store) SetCatalogEpoch(ctx context.Context, scope string, epoch uuid.UU
 	if scope != catalog.ScopeLocal || epoch == uuid.Nil || expected != nil && *expected == uuid.Nil {
 		return fmt.Errorf("catalog epoch requires local scope and nonzero identities")
 	}
-	tx, err := s.Begin(ctx)
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return err
 	}
