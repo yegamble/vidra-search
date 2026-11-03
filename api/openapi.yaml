@@ -649,6 +649,7 @@ components:
         video_id:
           type: string
           format: uuid
+          description: Representative source video for a document-derived suggestion.
         channel_handle:
           type: string
         is_personal:

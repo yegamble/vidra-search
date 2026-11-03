@@ -57,15 +57,29 @@ func (q *Queries) SuggestAggregatePrefix(ctx context.Context, arg SuggestAggrega
 }
 
 const suggestChannelPrefix = `-- name: SuggestChannelPrefix :many
-SELECT d.channel_name, min(d.channel_handle)::text AS channel_handle, max(d.views)::bigint AS views
-FROM search.documents d
-WHERE d.eligible
-  AND (NOT $1::bool OR NOT d.is_sensitive)
-  AND d.channel_name IS NOT NULL
-  AND lower(d.channel_name) LIKE $2::text
-GROUP BY d.channel_name
-ORDER BY views DESC
-LIMIT $3::int
+SELECT candidates.channel_name, COALESCE(witness.channel_handle, '')::text AS channel_handle,
+       candidates.views, witness.video_id
+FROM (
+    SELECT d.channel_name, max(d.views)::bigint AS views
+    FROM search.documents d
+    WHERE d.eligible
+      AND (NOT $1::bool OR NOT d.is_sensitive)
+      AND d.channel_name IS NOT NULL
+      AND lower(d.channel_name) LIKE $2::text
+    GROUP BY d.channel_name
+    ORDER BY views DESC, d.channel_name
+    LIMIT $3::int
+) candidates
+CROSS JOIN LATERAL (
+    SELECT d.video_id, d.channel_handle
+    FROM search.documents d
+    WHERE d.eligible AND (NOT $1::bool OR NOT d.is_sensitive)
+      AND lower(d.channel_name) = lower(candidates.channel_name)
+      AND d.channel_name = candidates.channel_name AND d.views = candidates.views
+    ORDER BY d.video_id
+    LIMIT 1
+) witness
+ORDER BY candidates.views DESC, candidates.channel_name, witness.video_id
 `
 
 type SuggestChannelPrefixParams struct {
@@ -75,11 +89,14 @@ type SuggestChannelPrefixParams struct {
 }
 
 type SuggestChannelPrefixRow struct {
-	ChannelName   *string `json:"channel_name"`
-	ChannelHandle string  `json:"channel_handle"`
-	Views         int64   `json:"views"`
+	ChannelName   *string   `json:"channel_name"`
+	ChannelHandle string    `json:"channel_handle"`
+	Views         int64     `json:"views"`
+	VideoID       uuid.UUID `json:"video_id"`
 }
 
+// Keep the label, handle and representative identifier on the same source row.
+// Limit groups first so indexed representative lookups stay bounded by @lim.
 func (q *Queries) SuggestChannelPrefix(ctx context.Context, arg SuggestChannelPrefixParams) ([]SuggestChannelPrefixRow, error) {
 	rows, err := q.db.Query(ctx, suggestChannelPrefix, arg.HideSensitive, arg.Prefix, arg.Lim)
 	if err != nil {
@@ -89,7 +106,12 @@ func (q *Queries) SuggestChannelPrefix(ctx context.Context, arg SuggestChannelPr
 	var items []SuggestChannelPrefixRow
 	for rows.Next() {
 		var i SuggestChannelPrefixRow
-		if err := rows.Scan(&i.ChannelName, &i.ChannelHandle, &i.Views); err != nil {
+		if err := rows.Scan(
+			&i.ChannelName,
+			&i.ChannelHandle,
+			&i.Views,
+			&i.VideoID,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -101,14 +123,26 @@ func (q *Queries) SuggestChannelPrefix(ctx context.Context, arg SuggestChannelPr
 }
 
 const suggestTagPrefix = `-- name: SuggestTagPrefix :many
-SELECT t::text AS tag, count(*)::bigint AS cnt
-FROM search.documents d, unnest(d.tags) AS t
-WHERE d.eligible
-  AND (NOT $1::bool OR NOT d.is_sensitive)
-  AND lower(t) LIKE $2::text
-GROUP BY t
-ORDER BY cnt DESC
-LIMIT $3::int
+SELECT candidates.tag, candidates.cnt, witness.video_id
+FROM (
+    SELECT t.tag::text AS tag, count(*)::bigint AS cnt
+    FROM search.documents d, unnest(d.tags) AS t(tag)
+    WHERE d.eligible
+      AND (NOT $1::bool OR NOT d.is_sensitive)
+      AND lower(t.tag) LIKE $2::text
+    GROUP BY t.tag
+    ORDER BY cnt DESC, t.tag
+    LIMIT $3::int
+) candidates
+CROSS JOIN LATERAL (
+    SELECT d.video_id
+    FROM search.documents d
+    WHERE d.eligible AND (NOT $1::bool OR NOT d.is_sensitive)
+      AND d.tags @> ARRAY[candidates.tag]
+    ORDER BY d.views DESC, d.video_id
+    LIMIT 1
+) witness
+ORDER BY candidates.cnt DESC, candidates.tag
 `
 
 type SuggestTagPrefixParams struct {
@@ -118,8 +152,9 @@ type SuggestTagPrefixParams struct {
 }
 
 type SuggestTagPrefixRow struct {
-	Tag string `json:"tag"`
-	Cnt int64  `json:"cnt"`
+	Tag     string    `json:"tag"`
+	Cnt     int64     `json:"cnt"`
+	VideoID uuid.UUID `json:"video_id"`
 }
 
 func (q *Queries) SuggestTagPrefix(ctx context.Context, arg SuggestTagPrefixParams) ([]SuggestTagPrefixRow, error) {
@@ -131,7 +166,7 @@ func (q *Queries) SuggestTagPrefix(ctx context.Context, arg SuggestTagPrefixPara
 	var items []SuggestTagPrefixRow
 	for rows.Next() {
 		var i SuggestTagPrefixRow
-		if err := rows.Scan(&i.Tag, &i.Cnt); err != nil {
+		if err := rows.Scan(&i.Tag, &i.Cnt, &i.VideoID); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

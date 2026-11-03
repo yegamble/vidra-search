@@ -241,7 +241,8 @@ func (s *Service) candidates(ctx context.Context, normalized string, req Request
 		}
 		cands = append(cands, ranking.Candidate{
 			Text: name, Kind: ranking.KindChannel, ChannelHandle: r.ChannelHandle,
-			Source: ranking.SourceDoc, ExactPrefix: true, Popularity: float64(r.Views),
+			VideoID: r.VideoID.String(), Source: ranking.SourceDoc,
+			ExactPrefix: true, Popularity: float64(r.Views),
 		})
 	}
 
@@ -254,7 +255,7 @@ func (s *Service) candidates(ctx context.Context, normalized string, req Request
 	for _, r := range tags {
 		cands = append(cands, ranking.Candidate{
 			Text: r.Tag, Kind: ranking.KindTag, Source: ranking.SourceDoc,
-			ExactPrefix: true, Popularity: float64(r.Cnt),
+			VideoID: r.VideoID.String(), ExactPrefix: true, Popularity: float64(r.Cnt),
 		})
 	}
 
