@@ -322,7 +322,9 @@ func (s *Service) dispatch(ctx context.Context, q *sqlcgen.Queries, ev Envelope)
 		if err := json.Unmarshal(ev.Payload, &p); err != nil {
 			return "", nil, err
 		}
-		return "accepted", nil, q.SuppressReconcileOrphans(ctx, pgconv.UUID(p.RunID))
+		// A legacy end has no verified page membership or ordering fence. Treat
+		// it as a receipt: retries and overlapping runs cannot authorize removal.
+		return "ignored", nil, nil
 
 	case TypeUserHistoryDel:
 		var p userHistoryDeletedPayload

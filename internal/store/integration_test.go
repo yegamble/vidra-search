@@ -405,7 +405,7 @@ func TestIntegrationRelatedAndHomeDeterminism(t *testing.T) {
 	}
 }
 
-func TestIntegrationReconcileOrphanSuppression(t *testing.T) {
+func TestIntegrationLegacyReconcileRefreshesWithoutOrphanSuppression(t *testing.T) {
 	env := newTestEnv(t)
 	ctx := context.Background()
 
@@ -414,8 +414,9 @@ func TestIntegrationReconcileOrphanSuppression(t *testing.T) {
 	ingest(t, env, upsertEnvelope(t, keep), upsertEnvelope(t, orphan))
 
 	runID := uuid.New()
-	// A reconcile pass that only re-sends `keep` must suppress `orphan` on end.
+	// An end receipt cannot prove that an omitted document is an orphan.
 	keepUpdated := keep
+	keepUpdated.Title = "refreshed video"
 	ingest(t, env,
 		rawEnvelope(t, event.TypeReconcileBegin, map[string]any{"run_id": runID}),
 		rawEnvelope(t, event.TypeReconcilePage, map[string]any{"run_id": runID, "videos": []event.VideoDoc{keepUpdated}}),
@@ -424,12 +425,12 @@ func TestIntegrationReconcileOrphanSuppression(t *testing.T) {
 
 	q := env.store.Queries()
 	gotKeep, _ := q.GetDocument(ctx, keep.ID)
-	if !gotKeep.Eligible {
-		t.Errorf("reconciled doc must stay eligible")
+	if !gotKeep.Eligible || gotKeep.Title != keepUpdated.Title {
+		t.Errorf("reconciled doc must be refreshed and stay eligible: %+v", gotKeep)
 	}
 	gotOrphan, _ := q.GetDocument(ctx, orphan.ID)
-	if gotOrphan.Eligible || gotOrphan.SuppressedReason == nil || *gotOrphan.SuppressedReason != "reconcile_orphan" {
-		t.Errorf("orphan must be suppressed with reason reconcile_orphan, got eligible=%v reason=%v", gotOrphan.Eligible, gotOrphan.SuppressedReason)
+	if !gotOrphan.Eligible || gotOrphan.SuppressedReason != nil {
+		t.Errorf("legacy receipt must preserve an omitted document: %+v", gotOrphan)
 	}
 }
 
