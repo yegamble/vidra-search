@@ -18,11 +18,12 @@ func TestCatalogEpochRejectsLegacyWritesBeforeInboxButAllowsIndependentEvents(t 
 	env := newTestEnv(t)
 	ctx := context.Background()
 	doc := video("canonical title")
-	ingest(t, env, upsertEnvelope(t, doc))
+	initial := upsertEnvelope(t, doc)
+	ingest(t, env, initial)
 	if err := env.store.SetCatalogEpoch(ctx, "local", uuid.New(), nil); err != nil {
 		t.Fatal(err)
 	}
-	var legacy []event.Envelope
+	legacy := []event.Envelope{initial} // Old successful receipts cannot bypass admission.
 	for _, typ := range []string{event.TypeVideoUpsert, event.TypeVideoSuppress,
 		event.TypeChannelUpsert, event.TypeChannelDelete, event.TypeUserSuppress,
 		event.TypeReconcileBegin, event.TypeReconcilePage, event.TypeReconcileEnd} {

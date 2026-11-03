@@ -122,15 +122,25 @@ func (s *Service) Ingest(ctx context.Context, events []Envelope) (Result, error)
 		return res, nil
 	}
 
-	tx, err := s.store.Begin(ctx)
+	tx, err := s.store.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return res, fmt.Errorf("event: begin tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	legacyBlocked, err := legacyCatalogBlocked(ctx, tx, events)
+	if err != nil {
+		return res, fmt.Errorf("event: catalog admission: %w", err)
+	}
 
 	base := s.store.Queries()
 	var effects []redisEffect
 	for _, ev := range events {
+		if legacyBlocked && isLegacyCatalogType(ev.Type) {
+			res.Failed = append(res.Failed, Failure{EventID: ev.EventID.String(),
+				Code: "catalog_legacy_disabled", Message: "catalog epoch requires full observations"})
+			s.observe(ev.Type, "failed")
+			continue // Reject before inbox deduplication, including old receipts.
+		}
 		outcome, evEffects, dup, ferr := s.applyOne(ctx, tx, base, ev)
 		switch {
 		case ferr != nil:
