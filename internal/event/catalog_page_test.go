@@ -41,6 +41,13 @@ func TestCatalogPageValidatesEachCanonicalDocumentBeforeHashing(t *testing.T) {
 	if err != nil || len(got.Documents) != 1 || got.Documents[0].Video.Views != 9007199254740993 {
 		t.Fatalf("valid canonical page = %+v, %v", got, err)
 	}
+	for _, optional := range []string{"category", "language", "license", "duration_seconds", "published_at"} {
+		delete(fields, optional) // Existing producer omits these nullable fields.
+	}
+	omitted, _ := json.Marshal(fields)
+	if got, err := parseCatalogPage(wrap(string(omitted))); err != nil || len(got.Documents) != 1 {
+		t.Fatalf("producer optional omission = %+v, %v", got, err)
+	}
 	rehash := func(raw string) []byte {
 		t.Helper()
 		var payload map[string]json.RawMessage
