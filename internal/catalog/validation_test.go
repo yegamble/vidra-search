@@ -37,6 +37,14 @@ func TestObjectFieldsRejectsMissingUnknownDuplicateAndCaseAliases(t *testing.T) 
 			t.Fatal(err)
 		}
 	}
+	for _, raw := range []string{`{"count":0,"optional":null}`, `{"count":0,"optional":null,"omitted":null}`} {
+		if _, err := ObjectFields([]byte(raw), keys, []string{"optional"}, "omitted"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := ObjectFields([]byte(`{"count":0,"optional":null,"omitted":null,"omitted":null}`), keys, []string{"optional"}, "omitted"); err == nil {
+		t.Error("accepted duplicate optional field")
+	}
 	for _, raw := range []string{
 		`null`, `[]`, `{}`, `{"count":null,"optional":null}`, `{"count":0}`,
 		`{"count":0,"optional":null,"extra":1}`, `{"count":0,"Count":0,"optional":null}`,

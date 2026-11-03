@@ -13,6 +13,9 @@ import (
 const (
 	TypeSnapshotPage = "catalog.snapshot.page"
 	TypeSnapshotEnd  = "catalog.snapshot.end"
+	MaxSnapshotBytes = 512 << 20
+	MaxDocuments     = 100000
+	MaxPages         = 1024
 )
 
 type Manifest struct {
@@ -43,8 +46,9 @@ func (m Manifest) Validate() error {
 
 // ObjectFields requires exact, unique field names and explicit required values.
 // Struct decoding alone accepts case aliases and silently takes the last duplicate.
+// Optional names may be absent; their values are checked by the typed caller.
 // This validates one object level; callers must validate each nested object too.
-func ObjectFields(raw []byte, keys, nullable []string) (map[string]json.RawMessage, error) {
+func ObjectFields(raw []byte, keys, nullable []string, optional ...string) (map[string]json.RawMessage, error) {
 	d := json.NewDecoder(bytes.NewReader(raw))
 	if token, err := d.Token(); err != nil || token != json.Delim('{') {
 		return nil, fmt.Errorf("catalog: expected object")
@@ -56,7 +60,7 @@ func ObjectFields(raw []byte, keys, nullable []string) (map[string]json.RawMessa
 			return nil, err
 		}
 		key, ok := token.(string)
-		if !ok || !slices.Contains(keys, key) || fields[key] != nil {
+		if !ok || !slices.Contains(keys, key) && !slices.Contains(optional, key) || fields[key] != nil {
 			return nil, fmt.Errorf("catalog: unknown or duplicate field")
 		}
 		var value json.RawMessage
