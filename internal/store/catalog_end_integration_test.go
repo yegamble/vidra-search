@@ -86,4 +86,22 @@ func TestCatalogEndStagingIsImmutableAndCompletionRequiresExactManifest(t *testi
 	if err := end(different); !errors.Is(err, store.ErrCatalogConflict) {
 		t.Fatalf("different completed manifest accepted: %v", err)
 	}
+	id.Generation = 2
+	if err := inTx(func(tx pgx.Tx) error {
+		return store.StageCatalogPage(ctx, tx, id, catalog.PageDigest{PageIndex: 1, ContentSHA256: content}, raw)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := end(manifest); !errors.Is(err, store.ErrCatalogConflict) {
+		t.Fatalf("end accepted an existing page outside its range: %v", err)
+	}
+	id.Generation = 1
+	if err := end(manifest); err != nil {
+		t.Fatal(err)
+	}
+	var highest, pending int64
+	if err := env.store.Pool.QueryRow(ctx, `SELECT highest_observed_generation,
+		(SELECT generation FROM search.catalog_snapshots) FROM search.catalog_scopes`).Scan(&highest, &pending); err != nil || highest != 2 || pending != 2 {
+		t.Fatalf("completed replay changed newer pending state: %d/%d, %v", highest, pending, err)
+	}
 }
