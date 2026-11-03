@@ -95,4 +95,16 @@ func TestCatalogGenerationAdmissionRetainsExpiryAndCompletedFences(t *testing.T)
 			t.Fatalf("pending observation changed live document: %+v, %v", row, err)
 		}
 	}
+	if _, err := env.store.Pool.Exec(ctx, `UPDATE search.catalog_snapshots
+		SET created_at=now()-interval '25 hours'`); err != nil {
+		t.Fatal(err)
+	}
+	id.Generation = 6
+	if err := admit(id); !errors.Is(err, store.ErrCatalogConflict) {
+		t.Fatalf("aged pending generation admitted: %v", err)
+	}
+	id.Generation = 7
+	if err := admit(id); err != nil {
+		t.Fatal(err)
+	}
 }
