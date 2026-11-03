@@ -79,6 +79,8 @@ func newTestEnv(t *testing.T) *testEnv {
 
 	// Clean slate for every test — Postgres tables and the isolated test Redis.
 	if _, err := st.Pool.Exec(ctx, `TRUNCATE
+		search.catalog_snapshot_pages, search.catalog_snapshots,
+		search.catalog_scopes, search.catalog_epochs,
 		search.documents, search.events_inbox, search.service_config,
 		search.query_log, search.query_aggregates, search.user_search_history,
 		search.user_watch_projection, search.behavior_events,

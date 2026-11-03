@@ -47,6 +47,28 @@ type SearchCatalogScope struct {
 	CompletedPagesSha256      *string            `json:"completed_pages_sha256"`
 }
 
+type SearchCatalogSnapshot struct {
+	Scope            string    `json:"scope"`
+	Epoch            uuid.UUID `json:"epoch"`
+	Generation       int64     `json:"generation"`
+	CreatedAt        time.Time `json:"created_at"`
+	PageCount        *int32    `json:"page_count"`
+	DocumentCount    *int64    `json:"document_count"`
+	MembershipSha256 *string   `json:"membership_sha256"`
+	PagesSha256      *string   `json:"pages_sha256"`
+}
+
+type SearchCatalogSnapshotPage struct {
+	Scope         string    `json:"scope"`
+	Epoch         uuid.UUID `json:"epoch"`
+	Generation    int64     `json:"generation"`
+	PageIndex     int32     `json:"page_index"`
+	Documents     []byte    `json:"documents"`
+	DocumentCount int32     `json:"document_count"`
+	ContentSha256 string    `json:"content_sha256"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
 // RETIRED (0017): no longer read or written. See search.co_watch -- same story for the co-search half of the blend.
 type SearchCoSearch struct {
 	VideoA    uuid.UUID `json:"video_a"`
