@@ -41,6 +41,18 @@ func TestCatalogPageValidatesEachCanonicalDocumentBeforeHashing(t *testing.T) {
 	if err != nil || len(got.Documents) != 1 || got.Documents[0].Video.Views != 9007199254740993 {
 		t.Fatalf("valid canonical page = %+v, %v", got, err)
 	}
+	rehash := func(raw string) []byte {
+		t.Helper()
+		var payload map[string]json.RawMessage
+		_ = json.Unmarshal([]byte(raw), &payload)
+		_, digest, err := catalog.DocumentsDigest(payload["documents"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		payload["content_sha256"], _ = json.Marshal(digest)
+		out, _ := json.Marshal(payload)
+		return out
+	}
 	for _, mutate := range []func(map[string]any){
 		func(v map[string]any) { v["kind"] = "remote" },
 		func(v map[string]any) { v["privacy"] = "private" },
@@ -49,6 +61,7 @@ func TestCatalogPageValidatesEachCanonicalDocumentBeforeHashing(t *testing.T) {
 		func(v map[string]any) { v["likes"] = -1 },
 		func(v map[string]any) { v["created_at"] = nil },
 		func(v map[string]any) { v["ID"] = v["id"] },
+		func(v map[string]any) { v["id"] = nil },
 		func(v map[string]any) { delete(v, "is_sensitive") },
 	} {
 		var changed map[string]any
@@ -62,9 +75,11 @@ func TestCatalogPageValidatesEachCanonicalDocumentBeforeHashing(t *testing.T) {
 	for _, bad := range [][]byte{
 		wrap(), wrap(string(validVideo), string(validVideo)),
 		wrap(strings.Replace(string(validVideo), `"title":`, `"title":"duplicate","title":`, 1)),
-		[]byte(strings.Replace(string(page), `"eligible":true`, `"eligible":false`, 1)),
-		[]byte(strings.Replace(string(page), `"suppressed_reason":null`, `"suppressed_reason":"hidden"`, 1)),
+		rehash(strings.Replace(string(page), `"eligible":true`, `"eligible":false`, 1)),
+		rehash(strings.Replace(string(page), `"eligible":true`, `"eligible":true,"Eligible":true`, 1)),
+		rehash(strings.Replace(string(page), `"suppressed_reason":null`, `"suppressed_reason":"hidden"`, 1)),
 		[]byte(strings.Replace(string(page), `"page_index":0`, `"page_index":-1`, 1)),
+		[]byte(strings.Replace(string(page), `"page_index":0,`, ``, 1)),
 		[]byte(strings.Replace(string(page), got.ContentSHA256, strings.Repeat("0", 64), 1)),
 	} {
 		if _, err := parseCatalogPage(bad); err == nil {
