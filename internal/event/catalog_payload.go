@@ -1,6 +1,7 @@
 package event
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 
@@ -49,6 +50,11 @@ func validateCatalogIdentity(id catalog.Identity, fields map[string]json.RawMess
 func canonicalCatalogUUID(raw []byte, id uuid.UUID) bool {
 	var value string
 	return id != uuid.Nil && json.Unmarshal(raw, &value) == nil && value == id.String()
+}
+
+func canonicalCatalogInteger(raw []byte, value int64) bool {
+	canonical, _ := json.Marshal(value)
+	return bytes.Equal(bytes.TrimSpace(raw), canonical)
 }
 
 type catalogDocument struct {
@@ -111,6 +117,10 @@ func parseCatalogPage(raw []byte) (catalogPage, error) {
 			return page, err // Typed integral fields reject exponent/fraction forms.
 		}
 		v := doc.Video
+		// JSONB normalizes -0 to 0, while UseNumber preserves its hash spelling.
+		if !canonicalCatalogInteger(videoFields["views"], v.Views) || !canonicalCatalogInteger(videoFields["likes"], int64(v.Likes)) || v.DurationSeconds != nil && !canonicalCatalogInteger(videoFields["duration_seconds"], int64(*v.DurationSeconds)) {
+			return page, fmt.Errorf("catalog: noncanonical integral document field")
+		}
 		if !doc.Eligible || doc.SuppressedReason != nil || v.Kind != wire.Scope || v.Privacy != "public" || v.State != "published" || !canonicalCatalogUUID(videoFields["id"], v.ID) || seen[v.ID] {
 			return page, fmt.Errorf("catalog: invalid canonical eligibility or membership")
 		}
