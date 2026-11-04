@@ -3,8 +3,8 @@
 ## Health & readiness
 
 - `GET /healthz` — process liveness; always 200 while the process is up.
-- `GET /readyz` — dependency readiness; 200 when Postgres and Redis both ping,
-  else 503 with per-component detail (`{"status":"degraded","components":{...}}`).
+- `GET /readyz` — dependency readiness; Postgres failure returns 503. Redis
+  failure returns 200 with degraded component detail (`{"status":"degraded","components":{...}}`).
   Wire orchestrator readiness gates to this.
 - `GET /version` — build metadata (version/commit/date/go).
 - `GET /metrics` — Prometheus scrape (only when `METRICS_ENABLED=true`).
