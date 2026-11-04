@@ -27,6 +27,84 @@ tags:
   - name: moderation
     description: Operator suppression of abusive query suggestions (global, not per-viewer).
 paths:
+  /internal/v2/catalog/status:
+    get:
+      operationId: getCatalogStatus
+      summary: Read full-only capability and persisted completion evidence.
+      tags: [events]
+      parameters:
+        - name: scope
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [local]
+      responses:
+        '200':
+          description: Explicit status; uninitialized or pending-only state is not ready.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CatalogStatus'
+        '401':
+          description: Missing or invalid internal authentication.
+        '422':
+          description: One supported scope is required.
+  /internal/v2/catalog/epoch:
+    put:
+      operationId: setCatalogEpoch
+      summary: Explicitly initialize or reset epoch with predecessor CAS.
+      description: >-
+        Maximum complete encoded request is 1048576 bytes. Same-epoch retries
+        require the original predecessor; retired epochs cannot be reused.
+        Success requires a separate GET status verification by the producer.
+      tags: [events]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CatalogEpochRequest'
+      responses:
+        '204':
+          description: CAS applied or exact retry; fetch and verify status independently.
+        '401':
+          description: Missing or invalid internal authentication.
+        '409':
+          description: Epoch/predecessor conflict or retired epoch.
+        '413':
+          description: Complete encoded request exceeds byte budget.
+        '422':
+          description: Invalid exact request shape or canonical identity.
+  /internal/v2/catalog/events:
+    post:
+      operationId: postCatalogEvents
+      summary: Stage and atomically complete immutable full observations.
+      description: >-
+        Only schema_version 2 page/end events are supported. Per-event failures
+        roll back admission, quota and payload together. No legacy inbox shortcut.
+        Staged replay may be accepted with duplicates=0; accepted is not completion
+        proof. Exact completed end replay succeeds; pruned completed pages fail.
+      tags: [events]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CatalogEventsRequest'
+      responses:
+        '200':
+          description: Per-event outcome; compare exact completed status separately.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventsResponse'
+        '401':
+          description: Missing or invalid internal authentication.
+        '413':
+          description: Complete encoded request exceeds 1048576 bytes.
+        '422':
+          description: Invalid exact batch/envelope framing.
   /internal/v1/suggestions:
     get:
       operationId: getSuggestions

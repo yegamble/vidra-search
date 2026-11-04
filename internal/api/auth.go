@@ -13,7 +13,7 @@ import (
 )
 
 // internalAuthHeader is the HMAC authentication header vidra-core presents on
-// every /internal/v1 call.
+// every versioned internal call.
 const internalAuthHeader = "X-Vidra-Internal-Auth"
 
 // internalAuthSkew bounds the accepted clock skew between the two services.
@@ -33,7 +33,7 @@ func BuildInternalAuthHeader(secret string, ts int64, method, path string) strin
 	return "v1:" + strconv.FormatInt(ts, 10) + ":" + InternalSignature(secret, ts, method, path)
 }
 
-// internalAuth authenticates /internal/v1 requests. It parses the versioned
+// internalAuth authenticates versioned internal requests. It parses the versioned
 // header, rejects a stale timestamp (replay window ±120s), and constant-time
 // compares the signature computed over ts\nMETHOD\nPATH. Any failure is a 401
 // with the standard envelope; the reason is never disclosed to the caller.

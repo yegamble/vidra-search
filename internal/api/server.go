@@ -1,7 +1,7 @@
 // Package api wires the Echo HTTP server for vidra-search: routing, middleware,
 // and the thin request/response handlers. Application logic lives in the service
 // packages (suggest, search, recommendation, event). All business endpoints sit
-// under /internal/v1 behind HMAC authentication; only the ops probes
+// under versioned /internal paths behind HMAC authentication; only the ops probes
 // (/healthz, /readyz, /version, /metrics) are public and excluded from the
 // OpenAPI contract.
 package api
@@ -174,7 +174,7 @@ func (s *Server) routes() {
 		s.echo.GET("/metrics", echo.WrapHandler(s.metrics.Handler()))
 	}
 
-	// All business endpoints live under /internal/v1 behind HMAC auth. They are
+	// Legacy business endpoints live under /internal/v1 behind HMAC auth. They are
 	// registered unconditionally so the OpenAPI drift guard always sees the full
 	// surface (the handlers no-op safely when a service is nil in tests).
 	g := s.echo.Group("/internal/v1", internalAuth(s.cfg.InternalSecret))
@@ -193,6 +193,11 @@ func (s *Server) routes() {
 	g.DELETE("/users/:user_id/search-history", s.handleClearSearchHistory)
 	g.DELETE("/users/:user_id/search-history/:normalized_query", s.handleDeleteSearchHistoryEntry)
 	g.DELETE("/users/:user_id", s.handleDeleteUser)
+	// Advertise full-only capability together with all guarded operations.
+	v2 := s.echo.Group("/internal/v2/catalog", internalAuth(s.cfg.InternalSecret))
+	v2.GET("/status", s.handleCatalogStatus)
+	v2.PUT("/epoch", s.handleCatalogEpoch)
+	v2.POST("/events", s.handleCatalogEvents)
 }
 
 // requestLogger emits one structured slog line per request and, when metrics are
