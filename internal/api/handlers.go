@@ -16,10 +16,15 @@ import (
 	"github.com/vidra/vidra-search/internal/suggest"
 )
 
-// handleSuggestions serves GET /internal/v1/suggestions. It always returns 200:
-// the pipeline degrades to an empty list on any internal trouble.
+// handleSuggestions degrades pipeline trouble to an empty list. Catalog
+// authority failures return 503 so the caller cannot accept an unverified list.
 func (s *Server) handleSuggestions(c echo.Context) error {
+	fence, err := s.beginCatalogRead(c)
+	if err != nil {
+		return err
+	}
 	req := suggest.Request{
+		CatalogFence:   fence.epoch + ":" + fence.generation,
 		Query:          c.QueryParam("q"),
 		Limit:          qInt(c, "limit"),
 		HideSensitive:  qBool(c, "hide_sensitive"),
@@ -38,11 +43,18 @@ func (s *Server) handleSuggestions(c echo.Context) error {
 		// spec metric.
 		s.metrics.ObserveSuggest(time.Since(start))
 	}
+	if err := s.finishCatalogRead(c, fence); err != nil {
+		return err
+	}
 	return c.JSON(http.StatusOK, resp)
 }
 
 // handleSearch serves GET /internal/v1/search — simple-mode hybrid search.
 func (s *Server) handleSearch(c echo.Context) error {
+	fence, err := s.beginCatalogRead(c)
+	if err != nil {
+		return err
+	}
 	req := search.Request{
 		Query:         c.QueryParam("q"),
 		Limit:         qInt(c, "limit"),
@@ -63,12 +75,19 @@ func (s *Server) handleSearch(c echo.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := s.finishCatalogRead(c, fence); err != nil {
+		return err
+	}
 	return c.JSON(http.StatusOK, resp)
 }
 
 // handleRelated serves GET /internal/v1/recommendations/related?video_id=...
 func (s *Server) handleRelated(c echo.Context) error {
 	videoID, err := queryUUID(c, "video_id")
+	if err != nil {
+		return err
+	}
+	fence, err := s.beginCatalogRead(c)
 	if err != nil {
 		return err
 	}
@@ -83,11 +102,18 @@ func (s *Server) handleRelated(c echo.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := s.finishCatalogRead(c, fence); err != nil {
+		return err
+	}
 	return c.JSON(http.StatusOK, resp)
 }
 
 // handleHome serves GET /internal/v1/recommendations/home.
 func (s *Server) handleHome(c echo.Context) error {
+	fence, err := s.beginCatalogRead(c)
+	if err != nil {
+		return err
+	}
 	resp, err := s.svcs.Rec.Home(c.Request().Context(), recommendation.HomeRequest{
 		Limit:         qInt(c, "limit"),
 		HideSensitive: qBool(c, "hide_sensitive"),
@@ -97,6 +123,9 @@ func (s *Server) handleHome(c echo.Context) error {
 		Personalized:  qBool(c, "personalized"),
 	})
 	if err != nil {
+		return err
+	}
+	if err := s.finishCatalogRead(c, fence); err != nil {
 		return err
 	}
 	return c.JSON(http.StatusOK, resp)
