@@ -34,6 +34,8 @@ paths:
       tags:
         - suggestions
       parameters:
+        - $ref: '#/components/parameters/CatalogEpoch'
+        - $ref: '#/components/parameters/CatalogGeneration'
         - name: q
           in: query
           required: true
@@ -88,8 +90,10 @@ paths:
               - simple
               - advanced
       responses:
+        '503':
+          $ref: '#/components/responses/CatalogUnavailable'
         '200':
-          description: Suggestions (empty on any internal degradation).
+          description: Suggestions (empty on pipeline degradation; authority failures return 503).
           content:
             application/json:
               schema:
@@ -215,6 +219,8 @@ paths:
       tags:
         - search
       parameters:
+        - $ref: '#/components/parameters/CatalogEpoch'
+        - $ref: '#/components/parameters/CatalogGeneration'
         - name: q
           in: query
           required: true
@@ -299,6 +305,8 @@ paths:
             type: boolean
             default: false
       responses:
+        '503':
+          $ref: '#/components/responses/CatalogUnavailable'
         '200':
           description: Ranked video ids.
           content:
@@ -318,6 +326,8 @@ paths:
       tags:
         - recommendations
       parameters:
+        - $ref: '#/components/parameters/CatalogEpoch'
+        - $ref: '#/components/parameters/CatalogGeneration'
         - name: video_id
           in: query
           required: true
@@ -354,6 +364,8 @@ paths:
           schema:
             type: string
       responses:
+        '503':
+          $ref: '#/components/responses/CatalogUnavailable'
         '200':
           description: Related recommendations.
           content:
@@ -379,6 +391,8 @@ paths:
       tags:
         - recommendations
       parameters:
+        - $ref: '#/components/parameters/CatalogEpoch'
+        - $ref: '#/components/parameters/CatalogGeneration'
         - name: limit
           in: query
           required: false
@@ -414,6 +428,8 @@ paths:
           schema:
             type: string
       responses:
+        '503':
+          $ref: '#/components/responses/CatalogUnavailable'
         '200':
           description: Home recommendations.
           content:
@@ -594,6 +610,28 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 components:
+  parameters:
+    CatalogEpoch:
+      name: X-Vidra-Catalog-Epoch
+      in: header
+      description: Required after catalog initialization; canonical epoch of the producer-verified full.
+      schema:
+        type: string
+        format: uuid
+    CatalogGeneration:
+      name: X-Vidra-Catalog-Generation
+      in: header
+      description: Required after initialization; exact completed generation checked before and after computation.
+      schema:
+        type: string
+        pattern: '^[1-9][0-9]*$'
+  responses:
+    CatalogUnavailable:
+      description: Catalog is unready, the verified fence is absent or stale, or authority changed during computation.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
   securitySchemes:
     InternalAuth:
       type: apiKey

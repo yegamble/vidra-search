@@ -111,6 +111,8 @@ type TrendReader interface {
 
 // Request is a suggestion request (already parsed from the HTTP query).
 type Request struct {
+	// CatalogFence is supplied by the HTTP authority check, never query input.
+	CatalogFence   string
 	Query          string
 	Limit          int
 	HideSensitive  bool
@@ -176,7 +178,7 @@ func (s *Service) Suggest(ctx context.Context, req Request) Response {
 	// leak, so a request carrying include_history + a user/session bypasses it.
 	personalized := req.IncludeHistory && (req.UserID != "" || req.SessionID != "")
 	cacheable := s.cache != nil && !personalized && len([]rune(normalized)) <= cachePrefixMax
-	cacheKey := fmt.Sprintf("sugg:%s:%t:%s", mode, req.HideSensitive, normalized)
+	cacheKey := fmt.Sprintf("sugg:%s:%s:%t:%s", req.CatalogFence, mode, req.HideSensitive, normalized)
 	if cacheable {
 		if raw, ok := s.cache.Get(ctx, cacheKey); ok {
 			var cached []ranking.Suggestion
