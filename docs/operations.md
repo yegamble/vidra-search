@@ -301,7 +301,9 @@ Initialize only with a compatible producer that retains its own verified full
 manifest and has passed paired recovery and fallback qualification. Initialization
 disables v1 catalog mutations. Catalog reads then require
 `X-Vidra-Catalog-Epoch` and `X-Vidra-Catalog-Generation`; absent, stale or unready
-authority returns `503`. Dependency `/readyz`, history and configuration remain
+authority returns `503`. Supplying either header always requires initialized
+authority, including after restore. Before initialization, legacy reads require
+both headers to be absent. Dependency `/readyz`, history and configuration remain
 separate. Receiver protocol support alone does not qualify a release or deployment.
 
 Shipped catalog producers emit local documents only. Local full activation
