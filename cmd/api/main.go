@@ -143,6 +143,10 @@ func serve() error {
 	runner.AddJob(worker.PeriodicJob{Name: "model_loader", Interval: cfg.ModelLoaderInterval, Run: loader.Refresh})
 	runner.AddJob(worker.PeriodicJob{Name: "experiment_refresh", Interval: 5 * time.Minute, Run: experiments.Refresh})
 	runner.AddJob(worker.PeriodicJob{Name: "shadow_eval", Interval: cfg.ShadowEvalInterval, Run: evaluator.Run})
+	runner.AddJob(worker.PeriodicJob{Name: "catalog_pending_cleanup", Interval: time.Hour, Run: func(ctx context.Context) error {
+		_, err := st.PruneCatalogSnapshots(ctx)
+		return err
+	}})
 
 	// One-shot job mode (e.g. `make shadow-eval`): run the named job once and exit.
 	if cfg.RunJob != "" {

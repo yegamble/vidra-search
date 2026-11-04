@@ -77,6 +77,7 @@ func TestCatalogHTTPAuthenticatedFullRoundtripAndGuardedReads(t *testing.T) {
 		"generation": "1", "page_count": 1, "document_count": 1, "membership_sha256": membership, "pages_sha256": content})
 	page.SchemaVersion, end.SchemaVersion = 2, 2
 	body := encode(map[string]any{"events": []any{end}})
+	request("POST", "/internal/v2/catalog/events", body, "", false, http.StatusUnauthorized)
 	exact := append(append([]byte(nil), body...), bytes.Repeat([]byte(" "), catalog.MaxRequestBytes-len(body))...)
 	request("POST", "/internal/v2/catalog/events", exact, "", true, 200)
 	request("POST", "/internal/v2/catalog/events", append(exact, ' '), "", true, 413)
