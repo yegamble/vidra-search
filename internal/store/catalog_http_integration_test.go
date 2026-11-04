@@ -4,6 +4,7 @@ package store_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -20,6 +21,9 @@ import (
 
 func TestCatalogHTTPAuthenticatedFullRoundtripAndGuardedReads(t *testing.T) {
 	env := newTestEnv(t)
+	foreign := video("foreign projection")
+	foreign.Kind = "remote"
+	ingest(t, env, upsertEnvelope(t, foreign))
 	secret := "synthetic-catalog-secret-at-least-32-bytes"
 	srv := api.New(&config.Config{InternalSecret: secret, HTTPBodyLimit: "2M", HTTPRequestTimeout: 30 * time.Second},
 		nil, nil, env.store, env.cache, api.Services{Events: env.events, Search: env.search, Suggest: env.sugg, Rec: env.rec})
@@ -92,6 +96,12 @@ func TestCatalogHTTPAuthenticatedFullRoundtripAndGuardedReads(t *testing.T) {
 		"/internal/v1/recommendations/home", "/internal/v1/recommendations/related?video_id=" + v.ID.String()}
 	for _, path := range paths {
 		request("GET", path, nil, "", true, 503)
+		request("GET", path, nil, "1", true, 503)
+	}
+	if _, err := env.store.Pool.Exec(context.Background(), `UPDATE search.documents SET eligible=false WHERE video_id=$1 AND kind='remote'`, foreign.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range paths {
 		request("GET", path, nil, "1", true, 200)
 	}
 	empty, _ := catalog.MembershipDigest(nil)
