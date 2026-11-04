@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/vidra/vidra-search/internal/catalog"
 )
 
 // Envelope is one event as delivered in the batch. Payload is decoded per type.
@@ -71,6 +73,7 @@ const (
 
 // knownTypes bounds the metric `type` label to a fixed set (unknown → "unknown").
 var knownTypes = map[string]bool{
+	catalog.TypeSnapshotPage: true, catalog.TypeSnapshotEnd: true,
 	TypeVideoUpsert: true, TypeVideoSuppress: true, TypeVideoStats: true,
 	TypeChannelUpsert: true, TypeChannelDelete: true, TypeUserSuppress: true,
 	TypeUserHistoryDel: true, TypeConfigUpdated: true,

@@ -17,8 +17,9 @@ All metrics use the `vidra_search_` prefix on a private registry:
 - `vidra_search_http_request_duration_seconds{method,route,status_class}` — latency.
 - `vidra_search_suggest_duration_seconds` — the suggestion pipeline in isolation.
 - `vidra_search_events_total{type,outcome}` — event intake, `outcome ∈
-  {accepted,duplicate,failed,ignored,counted}`. A rising `failed` rate means core
-  is sending malformed payloads.
+  {accepted,duplicate,failed,ignored,counted}`. Inspect failed event codes for
+  malformed payloads, quotas or stale generations. V2 `accepted` can mean staged
+  replay; it does not establish completed authority.
 - `vidra_search_documents{eligible}` — corpus size by static eligibility
   (scrape-time gauge). A collapse to zero indicates an index wipe or a broken
   event feed.
