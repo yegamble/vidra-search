@@ -53,6 +53,8 @@ func TestCatalogReadFenceChecksAfterComputationBeforeSuccess(t *testing.T) {
 	next := ready
 	next.CompletedGeneration = "8"
 	reset := catalog.Status{Epoch: &nextEpoch, Ready: true, CompletedGeneration: "1"}
+	foreign := ready
+	foreign.ForeignEligible = true
 	for _, tc := range []struct {
 		name       string
 		states     []catalog.Status
@@ -64,6 +66,7 @@ func TestCatalogReadFenceChecksAfterComputationBeforeSuccess(t *testing.T) {
 		{"matching", []catalog.Status{ready, ready}, epoch.String(), "7", nil, 200},
 		{"generation changed", []catalog.Status{ready, next}, epoch.String(), "7", nil, 503},
 		{"epoch changed", []catalog.Status{ready, reset}, epoch.String(), "7", nil, 503},
+		{"foreign eligibility changed", []catalog.Status{ready, foreign}, epoch.String(), "7", nil, 503},
 		{"initialization raced", []catalog.Status{{}, ready}, "", "", nil, 503},
 		{"noncanonical generation", []catalog.Status{ready}, epoch.String(), "07", nil, 503},
 		{"wrong epoch", []catalog.Status{ready}, nextEpoch.String(), "7", nil, 503},

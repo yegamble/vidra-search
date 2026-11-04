@@ -29,7 +29,7 @@ func (s *Server) beginCatalogRead(c echo.Context) (catalogReadFence, error) {
 		return catalogReadFence{}, nil // Legacy reads remain available until explicit initialization.
 	}
 	fence := catalogReadFence{status.Epoch.String(), status.CompletedGeneration}
-	if !status.Ready || fence.generation == "0" || c.Request().Header.Get("X-Vidra-Catalog-Epoch") != fence.epoch ||
+	if !status.Ready || status.ForeignEligible || fence.generation == "0" || c.Request().Header.Get("X-Vidra-Catalog-Epoch") != fence.epoch ||
 		c.Request().Header.Get("X-Vidra-Catalog-Generation") != fence.generation {
 		return catalogReadFence{}, unavailable()
 	}

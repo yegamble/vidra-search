@@ -16,6 +16,8 @@ type Limits struct {
 // Status is receiver evidence, not proof of a retained producer manifest match.
 // Counter strings deliberately support zero separately from positive Generation.
 type Status struct {
+	// Internal read eligibility evidence, separate from completed local authority.
+	ForeignEligible           bool       `json:"-"`
 	ProtocolVersion           int        `json:"protocol_version"`
 	SupportedScopes           []string   `json:"supported_scopes"`
 	SupportedEventTypes       []string   `json:"supported_event_types"`
