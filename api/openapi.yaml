@@ -641,6 +641,156 @@ components:
         HMAC-SHA256 capability header: v1:{unix_ts}:{hex(hmac_sha256(secret,
         ts+"\n"+METHOD+"\n"+PATH))}, verified within a ±120s window.
   schemas:
+    CatalogEpochRequest:
+      type: object
+      additionalProperties: false
+      required: [scope, epoch, expected_epoch]
+      properties:
+        scope:
+          type: string
+          enum: [local]
+        epoch:
+          type: string
+          format: uuid
+          description: Canonical nonzero never-reused epoch.
+        expected_epoch:
+          type: string
+          format: uuid
+          nullable: true
+          description: Null only for initial bootstrap; retries retain the original predecessor.
+    CatalogLimits:
+      type: object
+      additionalProperties: false
+      required: [max_request_bytes, max_snapshot_bytes, max_documents, max_pages]
+      properties:
+        max_request_bytes:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 1048576
+        max_snapshot_bytes:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 536870912
+        max_documents:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 100000
+        max_pages:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 1024
+    CatalogCompletedManifest:
+      type: object
+      nullable: true
+      additionalProperties: false
+      required: [page_count, document_count, membership_sha256, pages_sha256]
+      properties:
+        page_count:
+          type: integer
+          minimum: 0
+          maximum: 1024
+        document_count:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 100000
+        membership_sha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        pages_sha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+    CatalogStatus:
+      type: object
+      additionalProperties: false
+      description: >-
+        Receiver evidence only; producer must compare its retained verified full.
+        Ready requires completed authority in the current epoch. Staged/highest
+        observations do not prove completion. Zero counters are decimal strings.
+      required: [protocol_version, supported_scopes, supported_event_types, limits, scope, epoch,
+        ready, highest_observed_generation, completed_generation, completed_at,
+        completed_manifest, staged_snapshots, oldest_staged_at]
+      properties:
+        protocol_version:
+          type: integer
+          enum: [2]
+        supported_scopes:
+          type: array
+          minItems: 1
+          maxItems: 1
+          items:
+            type: string
+            enum: [local]
+        supported_event_types:
+          type: array
+          minItems: 2
+          maxItems: 2
+          uniqueItems: true
+          items:
+            type: string
+            enum: [catalog.snapshot.page, catalog.snapshot.end]
+        limits:
+          $ref: '#/components/schemas/CatalogLimits'
+        scope:
+          type: string
+          enum: [local]
+        epoch:
+          type: string
+          format: uuid
+          nullable: true
+        ready:
+          type: boolean
+        highest_observed_generation:
+          type: string
+          pattern: '^(0|[1-9][0-9]*)$'
+        completed_generation:
+          type: string
+          pattern: '^(0|[1-9][0-9]*)$'
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+        completed_manifest:
+          $ref: '#/components/schemas/CatalogCompletedManifest'
+        staged_snapshots:
+          type: integer
+          minimum: 0
+          maximum: 1
+        oldest_staged_at:
+          type: string
+          format: date-time
+          nullable: true
+    CatalogEventsRequest:
+      type: object
+      additionalProperties: false
+      description: >-
+        At most 1048576 encoded bytes including all envelopes and whitespace.
+        Exact unique keys are required throughout. Page payloads contain local
+        eligible canonical documents plus content_sha256; end payloads declare
+        page/document counts, membership_sha256 and pages_sha256. Every payload
+        carries scope, canonical epoch and a positive int64 generation string.
+        Accepted events may be staged only; verify exact completed status.
+      required: [events]
+      properties:
+        events:
+          type: array
+          minItems: 1
+          maxItems: 500
+          items:
+            allOf:
+              - $ref: '#/components/schemas/EventEnvelope'
+              - type: object
+                additionalProperties: false
+                properties:
+                  event_id: {type: string, format: uuid}
+                  type: {type: string, enum: [catalog.snapshot.page, catalog.snapshot.end]}
+                  occurred_at: {type: string, format: date-time}
+                  schema_version: {type: integer, enum: [2]}
+                  payload: {type: object}
     ErrorResponse:
       type: object
       required:
