@@ -44,7 +44,7 @@ func TestCatalogEpochHandlerIsStrictBoundedAndUsesExplicitCAS(t *testing.T) {
 	db := &epochController{}
 	srv := New(testConfig(), nil, nil, db, nil, Services{})
 	exact := valid + strings.Repeat(" ", catalog.MaxRequestBytes-len(valid))
-	if rec := callCatalogHandler(srv, "PUT", "/", exact, srv.handleCatalogEpoch); rec.Code != 204 || db.calls != 1 || db.epoch != epoch || db.expected != nil {
+	if rec := callCatalogHandler(srv, "PUT", "/", exact, srv.handleCatalogEpoch); rec.Code != http.StatusNoContent || db.calls != 1 || db.epoch != epoch || db.expected != nil {
 		t.Fatalf("initial CAS failed: status=%d controller=%+v", rec.Code, db)
 	}
 	reset := strings.Replace(valid, "null", `"`+predecessor.String()+`"`, 1)
