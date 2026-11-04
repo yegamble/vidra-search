@@ -13,7 +13,7 @@ import (
 )
 
 func TestCatalogBatchRequiresExactUnambiguousEnvelopeAndWholeWireBudget(t *testing.T) {
-	event := Envelope{EventID: uuid.New(), Type: catalog.TypeSnapshotEnd, SchemaVersion: 2,
+	event := Envelope{EventID: uuid.MustParse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"), Type: catalog.TypeSnapshotEnd, SchemaVersion: 2,
 		OccurredAt: time.Now().UTC(), Payload: json.RawMessage(`{"scope":"local"}`)}
 	item, _ := json.Marshal(event)
 	valid := []byte(`{"events":[` + string(item) + `]}`)
