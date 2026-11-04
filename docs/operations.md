@@ -308,6 +308,10 @@ preserves existing remote projection rows. External/custom v1 remote catalog
 writers are unsupported after local v2 initialization: their catalog events fail
 explicitly. There is no advertised remote v2 scope.
 
+After initialization, eligible foreign projection also makes all catalog reads
+return `503` for SQL fallback. Those rows remain stored; ineligible foreign rows
+do not block matching local reads. Completed local status remains unchanged.
+
 Each complete request is limited to 1 MiB. Pending snapshots allow at most
 512 MiB of canonical document-array bytes, 100,000 documents and 1,024 nonempty
 pages. Overflow fails explicitly; no truncation occurs. Pending admission expires
