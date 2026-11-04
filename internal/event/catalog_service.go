@@ -40,9 +40,12 @@ func (s *Service) IngestCatalog(ctx context.Context, events []Envelope) (Result,
 				code = "catalog_conflict"
 			}
 			res.Failed = append(res.Failed, Failure{EventID: ev.EventID.String(), Code: code, Message: err.Error()})
+			s.observe(ev.Type, "failed")
 			continue
 		}
 		res.Accepted++ // Staged replay may be accepted; this is not completion proof.
+		s.observe(ev.Type, "accepted")
+		s.observeLag(ev.OccurredAt)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return Result{Failed: []Failure{}}, err
