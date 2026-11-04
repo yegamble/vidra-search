@@ -265,7 +265,7 @@ sustained; do alert on `readyz` flapping and on a rising event `failed` rate.
 - `POST /internal/v1/events` accepts ≤500 events per batch. Each is deduped via
   `events_inbox` and applied inside its own savepoint, so one bad event lands in
   the `failed[]` array without failing the batch.
-- Replays are safe by construction: an identical batch returns all `duplicates`
+- V1 replays are safe by construction: an identical batch returns all `duplicates`
   with zero state change.
 
 ## Reconciliation
@@ -278,15 +278,50 @@ omitted by one run was not published during another. Ends therefore leave
 document eligibility unchanged, including when runs overlap or delivery retries.
 
 Individual suppression events still hide documents. Repairing missed deletions
-requires verified, atomic full-snapshot activation; the dormant catalog schema
-and hash helpers alone do not provide that protocol. Until it is implemented
-and qualified, legacy reconciliation cannot establish catalog completeness.
+requires verified, atomic full-snapshot activation. Legacy reconciliation cannot
+establish catalog completeness; v2 requires a compatible producer and independent
+runtime qualification before activation.
 
 - If reconciliation stops (no end receipt for a long window), the index can
   drift stale. The `reconcile_guard` worker (W2) sets
   `vidra_search_reconcile_age_seconds` and logs a warning past ~48h; also watch
   the `vidra_search_documents` gauge against the expected catalog size. Neither
   the age nor a matching count proves exact membership.
+
+## Canonical full observations (v2)
+
+The HMAC-authenticated `/internal/v2/catalog/{status,epoch,events}` operations
+support local full snapshots. Status reports exact completed epoch, generation
+and manifest separately from pending diagnostics. Accepted events can be staged
+only; verify completed status rather than accepted counts or the legacy age gauge.
+Epoch CAS returns `204`; fetch and verify status independently afterward.
+
+Initialize only with a compatible producer that retains its own verified full
+manifest and has passed paired recovery and fallback qualification. Initialization
+disables v1 catalog mutations. Catalog reads then require
+`X-Vidra-Catalog-Epoch` and `X-Vidra-Catalog-Generation`; absent, stale or unready
+authority returns `503`. Dependency `/readyz`, history and configuration remain
+separate. Receiver protocol support alone does not qualify a release or deployment.
+
+Shipped catalog producers emit local documents only. Local full activation
+preserves existing remote projection rows. External/custom v1 remote catalog
+writers are unsupported after local v2 initialization: their catalog events fail
+explicitly. There is no advertised remote v2 scope.
+
+Each complete request is limited to 1 MiB. Pending snapshots allow at most
+512 MiB of canonical document-array bytes, 100,000 documents and 1,024 nonempty
+pages. Overflow fails explicitly; no truncation occurs. Pending admission expires
+after 24 hours; hourly cleanup deletes expired payloads while retaining permanent
+epoch and generation fences. An expired highest generation needs a fresh capture.
+
+Full snapshots seed counters for new rows and preserve existing views/likes.
+The bundled producer currently has no stats emitter; verified metadata membership
+does not establish ranking-counter freshness.
+
+For an incompatible binary rollback, stop core catalog delivery and unset
+`SEARCH_SERVICE_URL` before changing the receiver. Retain the additive schema;
+disabling advanced ranking alone does not stop delivery. Recovery requires a fresh
+verified full before discovery uses the receiver again.
 
 ## Model registry & rollback (W3)
 
