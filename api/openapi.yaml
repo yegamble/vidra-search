@@ -55,7 +55,7 @@ paths:
       operationId: setCatalogEpoch
       summary: Explicitly initialize or reset epoch with predecessor CAS.
       description: >-
-        Maximum complete encoded request is1048576 bytes. Same-epoch retries
+        Maximum complete encoded request is 1048576 bytes. Same-epoch retries
         require the original predecessor; retired epochs cannot be reused.
         Success requires a separate GET status verification by the producer.
       tags: [events]
@@ -81,9 +81,9 @@ paths:
       operationId: postCatalogEvents
       summary: Stage and atomically complete immutable full observations.
       description: >-
-        Only schema_version2 page/end events are supported. Per-event failures
+        Only schema_version 2 page/end events are supported. Per-event failures
         roll back admission, quota and payload together. No legacy inbox shortcut.
-        Staged replay may be accepted with duplicates0; accepted is not completion
+        Staged replay may be accepted with duplicates=0; accepted is not completion
         proof. Exact completed end replay succeeds; pruned completed pages fail.
       tags: [events]
       requestBody:
@@ -102,7 +102,7 @@ paths:
         '401':
           description: Missing or invalid internal authentication.
         '413':
-          description: Complete encoded request exceeds1048576 bytes.
+          description: Complete encoded request exceeds 1048576 bytes.
         '422':
           description: Invalid exact batch/envelope framing.
   /internal/v1/suggestions:

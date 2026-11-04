@@ -174,7 +174,7 @@ func (s *Server) routes() {
 		s.echo.GET("/metrics", echo.WrapHandler(s.metrics.Handler()))
 	}
 
-	// All business endpoints live under /internal/v1 behind HMAC auth. They are
+	// Legacy business endpoints live under /internal/v1 behind HMAC auth. They are
 	// registered unconditionally so the OpenAPI drift guard always sees the full
 	// surface (the handlers no-op safely when a service is nil in tests).
 	g := s.echo.Group("/internal/v1", internalAuth(s.cfg.InternalSecret))
