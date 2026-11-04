@@ -692,20 +692,20 @@ components:
     CatalogEpoch:
       name: X-Vidra-Catalog-Epoch
       in: header
-      description: Required after catalog initialization; canonical epoch of the producer-verified full.
+      description: Canonical epoch of the producer-verified full. Required after initialization; supplying either fence header requires initialized authority.
       schema:
         type: string
         format: uuid
     CatalogGeneration:
       name: X-Vidra-Catalog-Generation
       in: header
-      description: Required after initialization; exact completed generation checked before and after computation.
+      description: Exact completed generation checked before and after computation. Required after initialization; supplying either fence header requires initialized authority.
       schema:
         type: string
         pattern: '^[1-9][0-9]*$'
   responses:
     CatalogUnavailable:
-      description: Catalog is unready, the verified fence is absent or stale, or authority changed during computation.
+      description: Catalog is unready, a supplied fence has no initialized authority, the required fence is absent or stale, or authority changed during computation.
       content:
         application/json:
           schema:

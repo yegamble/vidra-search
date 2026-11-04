@@ -66,6 +66,7 @@ func TestCatalogReadFenceChecksAfterComputationBeforeSuccess(t *testing.T) {
 		{"matching", []catalog.Status{ready, ready}, epoch.String(), "7", nil, 200},
 		{"generation changed", []catalog.Status{ready, next}, epoch.String(), "7", nil, 503},
 		{"epoch changed", []catalog.Status{ready, reset}, epoch.String(), "7", nil, 503},
+		{"receiver restored before initialization", []catalog.Status{ready, {}}, epoch.String(), "7", nil, 503},
 		{"foreign eligibility changed", []catalog.Status{ready, foreign}, epoch.String(), "7", nil, 503},
 		{"initialization raced", []catalog.Status{{}, ready}, "", "", nil, 503},
 		{"noncanonical generation", []catalog.Status{ready}, epoch.String(), "07", nil, 503},
@@ -78,8 +79,12 @@ func TestCatalogReadFenceChecksAfterComputationBeforeSuccess(t *testing.T) {
 			srv := New(testConfig(), nil, nil, db, nil, Services{Suggest: suggest.NewService(nil, nil, nil, nil, nil, nil)})
 			req := httptest.NewRequest(http.MethodGet, "/internal/v1/suggestions", nil)
 			req.Header.Set(internalAuthHeader, BuildInternalAuthHeader(testSecret, time.Now().Unix(), req.Method, req.URL.Path))
-			req.Header.Set("X-Vidra-Catalog-Epoch", tc.epoch)
-			req.Header.Set("X-Vidra-Catalog-Generation", tc.gen)
+			if tc.epoch != "" {
+				req.Header.Set("X-Vidra-Catalog-Epoch", tc.epoch)
+			}
+			if tc.gen != "" {
+				req.Header.Set("X-Vidra-Catalog-Generation", tc.gen)
+			}
 			rec := httptest.NewRecorder()
 			srv.Handler().ServeHTTP(rec, req)
 			if rec.Code != tc.want {
@@ -89,5 +94,34 @@ func TestCatalogReadFenceChecksAfterComputationBeforeSuccess(t *testing.T) {
 				t.Fatalf("success did not check both fences: %d reads", db.reads)
 			}
 		})
+	}
+}
+
+func TestCatalogReadFencePreInitializationRejectsDeclaredFenceForEmptySuggestions(t *testing.T) {
+	for _, headers := range []http.Header{
+		nil,
+		{"X-Vidra-Catalog-Epoch": {uuid.NewString()}, "X-Vidra-Catalog-Generation": {"7"}},
+		{"X-Vidra-Catalog-Epoch": {uuid.NewString()}},
+		{"X-Vidra-Catalog-Generation": {"7"}},
+		{"X-Vidra-Catalog-Epoch": {""}, "X-Vidra-Catalog-Generation": {""}},
+		{"X-Vidra-Catalog-Epoch": nil},
+		{"x-vidra-catalog-generation": {""}},
+	} {
+		db := &catalogReader{statuses: []catalog.Status{{}}}
+		srv := New(testConfig(), nil, nil, db, nil, Services{Suggest: suggest.NewService(nil, nil, nil, nil, nil, nil)})
+		req := httptest.NewRequest(http.MethodGet, "/internal/v1/suggestions", nil)
+		for name, values := range headers {
+			req.Header[name] = values
+		}
+		req.Header.Set(internalAuthHeader, BuildInternalAuthHeader(testSecret, time.Now().Unix(), req.Method, req.URL.Path))
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		want := http.StatusServiceUnavailable
+		if headers == nil {
+			want = http.StatusOK
+		}
+		if rec.Code != want {
+			t.Fatalf("declared headers=%v status=%d want%d: %s", headers, rec.Code, want, rec.Body.String())
+		}
 	}
 }

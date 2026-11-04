@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	"github.com/labstack/echo/v4"
 
@@ -26,7 +27,14 @@ func (s *Server) beginCatalogRead(c echo.Context) (catalogReadFence, error) {
 		return catalogReadFence{}, echo.NewHTTPError(http.StatusServiceUnavailable, "catalog authority unavailable").SetInternal(err)
 	}
 	if status.Epoch == nil {
-		return catalogReadFence{}, nil // Legacy reads remain available until explicit initialization.
+		// A declared fence requires authority even before initialization or after
+		// restore. Header.Get cannot distinguish an absent header from an empty one.
+		for name := range c.Request().Header {
+			if strings.EqualFold(name, "X-Vidra-Catalog-Epoch") || strings.EqualFold(name, "X-Vidra-Catalog-Generation") {
+				return catalogReadFence{}, unavailable()
+			}
+		}
+		return catalogReadFence{}, nil // Wholly unfenced legacy reads remain available.
 	}
 	fence := catalogReadFence{status.Epoch.String(), status.CompletedGeneration}
 	if !status.Ready || status.ForeignEligible || fence.generation == "0" || c.Request().Header.Get("X-Vidra-Catalog-Epoch") != fence.epoch ||
