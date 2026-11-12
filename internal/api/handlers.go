@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 
 	"github.com/vidra/vidra-search/internal/event"
 	"github.com/vidra/vidra-search/internal/moderation"
@@ -18,7 +18,7 @@ import (
 
 // handleSuggestions degrades pipeline trouble to an empty list. Catalog
 // authority failures return 503 so the caller cannot accept an unverified list.
-func (s *Server) handleSuggestions(c echo.Context) error {
+func (s *Server) handleSuggestions(c *echo.Context) error {
 	fence, err := s.beginCatalogRead(c)
 	if err != nil {
 		return err
@@ -50,7 +50,7 @@ func (s *Server) handleSuggestions(c echo.Context) error {
 }
 
 // handleSearch serves GET /internal/v1/search — simple-mode hybrid search.
-func (s *Server) handleSearch(c echo.Context) error {
+func (s *Server) handleSearch(c *echo.Context) error {
 	fence, err := s.beginCatalogRead(c)
 	if err != nil {
 		return err
@@ -82,7 +82,7 @@ func (s *Server) handleSearch(c echo.Context) error {
 }
 
 // handleRelated serves GET /internal/v1/recommendations/related?video_id=...
-func (s *Server) handleRelated(c echo.Context) error {
+func (s *Server) handleRelated(c *echo.Context) error {
 	videoID, err := queryUUID(c, "video_id")
 	if err != nil {
 		return err
@@ -109,7 +109,7 @@ func (s *Server) handleRelated(c echo.Context) error {
 }
 
 // handleHome serves GET /internal/v1/recommendations/home.
-func (s *Server) handleHome(c echo.Context) error {
+func (s *Server) handleHome(c *echo.Context) error {
 	fence, err := s.beginCatalogRead(c)
 	if err != nil {
 		return err
@@ -137,7 +137,7 @@ type eventsRequest struct {
 }
 
 // handleEvents serves POST /internal/v1/events: dedupe + apply a batch (≤500).
-func (s *Server) handleEvents(c echo.Context) error {
+func (s *Server) handleEvents(c *echo.Context) error {
 	var body eventsRequest
 	if err := c.Bind(&body); err != nil {
 		return newValidation("events", "invalid JSON body")
@@ -156,7 +156,7 @@ func (s *Server) handleEvents(c echo.Context) error {
 }
 
 // handleGetSearchHistory serves GET /internal/v1/users/{user_id}/search-history.
-func (s *Server) handleGetSearchHistory(c echo.Context) error {
+func (s *Server) handleGetSearchHistory(c *echo.Context) error {
 	userID, err := pathUUID(c, "user_id")
 	if err != nil {
 		return err
@@ -170,7 +170,7 @@ func (s *Server) handleGetSearchHistory(c echo.Context) error {
 
 // handleClearSearchHistory serves DELETE /internal/v1/users/{user_id}/search-history:
 // deletes the user's history and their rows in the raw ledgers.
-func (s *Server) handleClearSearchHistory(c echo.Context) error {
+func (s *Server) handleClearSearchHistory(c *echo.Context) error {
 	userID, err := pathUUID(c, "user_id")
 	if err != nil {
 		return err
@@ -185,7 +185,7 @@ func (s *Server) handleClearSearchHistory(c echo.Context) error {
 // DELETE /internal/v1/users/{user_id}/search-history/{normalized_query}. Echo has
 // already URL-decoded the path param, so it is used directly as the normalized
 // query key.
-func (s *Server) handleDeleteSearchHistoryEntry(c echo.Context) error {
+func (s *Server) handleDeleteSearchHistoryEntry(c *echo.Context) error {
 	userID, err := pathUUID(c, "user_id")
 	if err != nil {
 		return err
@@ -199,7 +199,7 @@ func (s *Server) handleDeleteSearchHistoryEntry(c echo.Context) error {
 
 // handleDeleteUser serves DELETE /internal/v1/users/{user_id}: a full privacy
 // purge (history, projections, and every ledger row naming the user).
-func (s *Server) handleDeleteUser(c echo.Context) error {
+func (s *Server) handleDeleteUser(c *echo.Context) error {
 	userID, err := pathUUID(c, "user_id")
 	if err != nil {
 		return err
@@ -213,7 +213,7 @@ func (s *Server) handleDeleteUser(c echo.Context) error {
 // handleListSuggestionBans serves GET /internal/v1/suggestions/bans: the paged
 // list of queries currently suppressed from instance-wide autosuggest, so a ban
 // can be reviewed and reversed by someone who did not place it.
-func (s *Server) handleListSuggestionBans(c echo.Context) error {
+func (s *Server) handleListSuggestionBans(c *echo.Context) error {
 	resp, err := s.svcs.Moderation.List(c.Request().Context(), qInt(c, "limit"), qInt(c, "offset"))
 	if err != nil {
 		return err
@@ -226,7 +226,7 @@ func (s *Server) handleListSuggestionBans(c echo.Context) error {
 // response echoes the key that actually moved so a later unban can target it.
 // PUT, not POST: banning the same query twice is the same end state, not a second
 // ban.
-func (s *Server) handleBanSuggestion(c echo.Context) error {
+func (s *Server) handleBanSuggestion(c *echo.Context) error {
 	resp, err := s.svcs.Moderation.Ban(c.Request().Context(), c.Param("normalized_query"))
 	if err != nil {
 		return moderationError(err)
@@ -236,7 +236,7 @@ func (s *Server) handleBanSuggestion(c echo.Context) error {
 
 // handleUnbanSuggestion serves DELETE /internal/v1/suggestions/bans/{normalized_query}.
 // Idempotent: unbanning a query that is not banned is still a 204.
-func (s *Server) handleUnbanSuggestion(c echo.Context) error {
+func (s *Server) handleUnbanSuggestion(c *echo.Context) error {
 	if err := s.svcs.Moderation.Unban(c.Request().Context(), c.Param("normalized_query")); err != nil {
 		return moderationError(err)
 	}
@@ -259,7 +259,7 @@ func moderationError(err error) error {
 // naming the offending parameter. Every id in this API is a UUID, so the
 // parse-or-422 is the same four lines at every route; having one copy is what
 // keeps the field name in the error body consistent with the route template.
-func pathUUID(c echo.Context, name string) (uuid.UUID, error) {
+func pathUUID(c *echo.Context, name string) (uuid.UUID, error) {
 	id, err := uuid.Parse(c.Param(name))
 	if err != nil {
 		return uuid.Nil, newValidation(name, "must be a valid UUID")
@@ -269,7 +269,7 @@ func pathUUID(c echo.Context, name string) (uuid.UUID, error) {
 
 // queryUUID is pathUUID for a required query parameter. Absent and malformed
 // are the same answer: a caller who did not name a video cannot be served one.
-func queryUUID(c echo.Context, name string) (uuid.UUID, error) {
+func queryUUID(c *echo.Context, name string) (uuid.UUID, error) {
 	id, err := uuid.Parse(c.QueryParam(name))
 	if err != nil {
 		return uuid.Nil, newValidation(name, "must be a valid UUID")
@@ -279,7 +279,7 @@ func queryUUID(c echo.Context, name string) (uuid.UUID, error) {
 
 // qInt returns the integer query value, or 0 when absent/invalid (the service
 // layers then apply their own default + clamp).
-func qInt(c echo.Context, name string) int {
+func qInt(c *echo.Context, name string) int {
 	v := c.QueryParam(name)
 	if v == "" {
 		return 0
@@ -292,7 +292,7 @@ func qInt(c echo.Context, name string) int {
 }
 
 // qBool returns the boolean query value (true only for a truthy value).
-func qBool(c echo.Context, name string) bool {
+func qBool(c *echo.Context, name string) bool {
 	b, err := strconv.ParseBool(c.QueryParam(name))
 	if err != nil {
 		return false

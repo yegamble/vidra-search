@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 
 	"github.com/vidra/vidra-search/internal/catalog"
 	"github.com/vidra/vidra-search/internal/store"
@@ -33,7 +33,7 @@ func callCatalogHandler(srv *Server, method, path, body string, handler echo.Han
 	rec := httptest.NewRecorder()
 	c := srv.Handler().NewContext(req, rec)
 	if err := handler(c); err != nil {
-		srv.httpErrorHandler(err, c)
+		srv.httpErrorHandler(c, err)
 	}
 	return rec
 }

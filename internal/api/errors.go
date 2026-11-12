@@ -3,10 +3,9 @@ package api
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // ErrorResponse is the single, consistent JSON error envelope every endpoint
@@ -46,8 +45,8 @@ func newValidation(field, message string) *ValidationError {
 // httpErrorHandler is Echo's central error handler. It converts any error into
 // the ErrorResponse envelope, logs 5xx with context, and never leaks internal
 // error text to clients on a 500.
-func (s *Server) httpErrorHandler(err error, c echo.Context) {
-	if c.Response().Committed {
+func (s *Server) httpErrorHandler(c *echo.Context, err error) {
+	if resp, _ := echo.UnwrapResponse(c.Response()); resp != nil && resp.Committed {
 		return
 	}
 
@@ -57,6 +56,10 @@ func (s *Server) httpErrorHandler(err error, c echo.Context) {
 	var fields []FieldError
 
 	var he *echo.HTTPError
+	// Echo v5's sentinel errors (ErrNotFound and ErrMethodNotAllowed from the
+	// router, the body limit's 413) are not *echo.HTTPError; they carry only a
+	// status code. Without this case they would all become 500s.
+	var sc echo.HTTPStatusCoder
 	var ve *ValidationError
 	switch {
 	case errors.As(err, &ve):
@@ -66,11 +69,11 @@ func (s *Server) httpErrorHandler(err error, c echo.Context) {
 		fields = ve.Fields
 	case errors.As(err, &he):
 		status = he.Code
-		if he.Message != nil {
-			message = fmt.Sprintf("%v", he.Message)
+		if he.Message != "" {
+			message = he.Message
 		}
-		if he.Internal != nil {
-			err = he.Internal
+		if inner := he.Unwrap(); inner != nil {
+			err = inner
 		}
 		// 501 Not Implemented is a documented, client-safe response. Give it a
 		// stable code so its message survives the generic 5xx message-scrubbing
@@ -78,6 +81,9 @@ func (s *Server) httpErrorHandler(err error, c echo.Context) {
 		if status == http.StatusNotImplemented {
 			code = "not_implemented"
 		}
+	case errors.As(err, &sc) && sc.StatusCode() != 0:
+		status = sc.StatusCode()
+		message = http.StatusText(status)
 	case errors.Is(err, context.DeadlineExceeded):
 		status = http.StatusServiceUnavailable
 		message = "the request timed out"
@@ -117,7 +123,7 @@ func (s *Server) httpErrorHandler(err error, c echo.Context) {
 
 // writeError sends the envelope directly (used by middleware that must respond
 // before the handler chain, e.g. HMAC auth failures).
-func writeError(c echo.Context, status int, code, message string) error {
+func writeError(c *echo.Context, status int, code, message string) error {
 	reqID := c.Response().Header().Get(echo.HeaderXRequestID)
 	return c.JSON(status, ErrorResponse{Error: ErrorBody{Code: code, Message: message, RequestID: reqID}})
 }

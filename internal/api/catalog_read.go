@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 
 	"github.com/vidra/vidra-search/internal/catalog"
 )
@@ -16,7 +16,7 @@ type catalogStatusReader interface {
 
 type catalogReadFence struct{ epoch, generation string }
 
-func (s *Server) beginCatalogRead(c echo.Context) (catalogReadFence, error) {
+func (s *Server) beginCatalogRead(c *echo.Context) (catalogReadFence, error) {
 	unavailable := func() error { return echo.NewHTTPError(http.StatusServiceUnavailable, "catalog authority unavailable") }
 	reader, ok := s.db.(catalogStatusReader)
 	if !ok {
@@ -24,7 +24,7 @@ func (s *Server) beginCatalogRead(c echo.Context) (catalogReadFence, error) {
 	}
 	status, err := reader.ReadCatalogStatus(c.Request().Context(), "local")
 	if err != nil {
-		return catalogReadFence{}, echo.NewHTTPError(http.StatusServiceUnavailable, "catalog authority unavailable").SetInternal(err)
+		return catalogReadFence{}, echo.NewHTTPError(http.StatusServiceUnavailable, "catalog authority unavailable").Wrap(err)
 	}
 	if status.Epoch == nil {
 		// A declared fence requires authority even before initialization or after
@@ -46,7 +46,7 @@ func (s *Server) beginCatalogRead(c echo.Context) (catalogReadFence, error) {
 
 // Check again before committing success. No DB lock/connection spans service
 // queries; a newer full or epoch must reject a response computed across fences.
-func (s *Server) finishCatalogRead(c echo.Context, before catalogReadFence) error {
+func (s *Server) finishCatalogRead(c *echo.Context, before catalogReadFence) error {
 	after, err := s.beginCatalogRead(c)
 	if err != nil {
 		return err

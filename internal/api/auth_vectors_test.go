@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // internalAuthVectorsPath is the shared conformance fixture for the v1
@@ -90,7 +90,7 @@ func TestInternalAuthGoldenVectorsVerify(t *testing.T) {
 
 			rec := httptest.NewRecorder()
 			c := e.NewContext(req, rec)
-			h := internalAuth(v.Secret)(func(c echo.Context) error {
+			h := internalAuth(v.Secret)(func(c *echo.Context) error {
 				return c.NoContent(http.StatusOK)
 			})
 			if err := h(c); err != nil {
