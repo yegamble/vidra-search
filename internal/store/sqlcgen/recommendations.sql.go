@@ -63,7 +63,7 @@ func (q *Queries) HomeRecent(ctx context.Context, arg HomeRecentParams) ([]HomeR
 
 const homeTrending = `-- name: HomeTrending :many
 SELECT d.video_id, d.channel_id,
-    ( d.views / power(EXTRACT(EPOCH FROM (now() - COALESCE(d.published_at, d.source_updated_at))) / 3600.0 + 2, 1.5) )::double precision AS score
+    ( d.views / power(EXTRACT(EPOCH FROM (now() - COALESCE(d.published_at, d.source_updated_at)))::float8 / 3600.0 + 2, 1.5) )::double precision AS score
 FROM search.documents d
 WHERE d.eligible
   AND (NOT $1::bool OR NOT d.is_sensitive)
@@ -88,6 +88,9 @@ type HomeTrendingRow struct {
 
 // Hacker-News-style gravity: views / (hours_since_published + 2)^1.5. Same
 // language is preferred first (language-aware) without excluding other langs.
+// The age is cast to float8 before power(): EXTRACT returns numeric, and
+// numeric power() over every eligible document was nearly all of this
+// statement's time (426 ms of it on a 13,776-document index; 40 ms in float8).
 func (q *Queries) HomeTrending(ctx context.Context, arg HomeTrendingParams) ([]HomeTrendingRow, error) {
 	rows, err := q.db.Query(ctx, homeTrending,
 		arg.HideSensitive,

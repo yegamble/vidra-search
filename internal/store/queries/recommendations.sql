@@ -41,8 +41,11 @@ LIMIT @lim::int;
 -- name: HomeTrending :many
 -- Hacker-News-style gravity: views / (hours_since_published + 2)^1.5. Same
 -- language is preferred first (language-aware) without excluding other langs.
+-- The age is cast to float8 before power(): EXTRACT returns numeric, and
+-- numeric power() over every eligible document was nearly all of this
+-- statement's time (426 ms of it on a 13,776-document index; 40 ms in float8).
 SELECT d.video_id, d.channel_id,
-    ( d.views / power(EXTRACT(EPOCH FROM (now() - COALESCE(d.published_at, d.source_updated_at))) / 3600.0 + 2, 1.5) )::double precision AS score
+    ( d.views / power(EXTRACT(EPOCH FROM (now() - COALESCE(d.published_at, d.source_updated_at)))::float8 / 3600.0 + 2, 1.5) )::double precision AS score
 FROM search.documents d
 WHERE d.eligible
   AND (NOT @hide_sensitive::bool OR NOT d.is_sensitive)
