@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 
 	"github.com/vidra/vidra-search/internal/version"
 )
@@ -54,7 +54,7 @@ const readinessCacheTTL = 2 * time.Second
 
 // handleLive reports the process is up and serving. It performs no dependency
 // checks so an orchestrator can distinguish "process alive" from "ready".
-func (s *Server) handleLive(c echo.Context) error {
+func (s *Server) handleLive(c *echo.Context) error {
 	return c.JSON(http.StatusOK, livenessResponse{Status: "ok"})
 }
 
@@ -73,7 +73,7 @@ func (s *Server) handleLive(c echo.Context) error {
 // Draining wins over everything: once Drain() has been called this instance is
 // leaving, and it says so before the listener closes so the balancer has a
 // chance to notice.
-func (s *Server) handleReady(c echo.Context) error {
+func (s *Server) handleReady(c *echo.Context) error {
 	if s.draining.Load() {
 		// Not cached and not probed: the answer does not depend on any
 		// dependency, and spending a pooled connection to decorate a 503 nobody
@@ -161,7 +161,7 @@ type versionResponse struct {
 
 // handleVersion reports the running build's metadata. It exposes only build
 // information, never secrets or configuration.
-func (s *Server) handleVersion(c echo.Context) error {
+func (s *Server) handleVersion(c *echo.Context) error {
 	return c.JSON(http.StatusOK, versionResponse{
 		Name:      "vidra-search",
 		Version:   version.Version,

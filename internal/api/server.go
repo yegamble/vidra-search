@@ -14,8 +14,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/labstack/echo/v4"
-	"github.com/labstack/echo/v4/middleware"
+	"github.com/labstack/echo/v5"
+	"github.com/labstack/echo/v5/middleware"
+	"github.com/labstack/gommon/bytes"
 
 	"github.com/vidra/vidra-search/internal/config"
 	"github.com/vidra/vidra-search/internal/event"
@@ -45,7 +46,10 @@ type Services struct {
 
 // Server holds the Echo instance and its dependencies.
 type Server struct {
-	echo      *echo.Echo
+	echo *echo.Echo
+	// httpSrv is the listener. Echo v5 no longer owns an http.Server, so the
+	// api does, which is what keeps the read, write and idle timeouts applied.
+	httpSrv   *http.Server
 	cfg       *config.Config
 	logger    *slog.Logger
 	metrics   *telemetry.Metrics
@@ -91,11 +95,17 @@ func New(cfg *config.Config, logger *slog.Logger, metrics *telemetry.Metrics, db
 		logger = slog.Default()
 	}
 	e := echo.New()
-	e.HideBanner = true
-	e.HidePort = true
 
 	s := &Server{
-		echo:      e,
+		echo: e,
+		// The same two timeouts the echo v4 server was given; header and idle
+		// timeouts keep inheriting ReadTimeout, as they did.
+		httpSrv: &http.Server{
+			Addr:         cfg.HTTPAddr(),
+			Handler:      e,
+			ReadTimeout:  cfg.HTTPReadTimeout,
+			WriteTimeout: cfg.HTTPWriteTimeout,
+		},
 		cfg:       cfg,
 		logger:    logger,
 		metrics:   metrics,
@@ -112,7 +122,7 @@ func New(cfg *config.Config, logger *slog.Logger, metrics *telemetry.Metrics, db
 	e.Use(correlationID())
 	e.Use(s.requestLogger())
 	e.Use(requestDeadline(cfg.HTTPRequestTimeout))
-	e.Use(middleware.BodyLimitWithConfig(middleware.BodyLimitConfig{Limit: cfg.HTTPBodyLimit}))
+	e.Use(middleware.BodyLimitWithConfig(middleware.BodyLimitConfig{LimitBytes: httpBodyLimitBytes(cfg.HTTPBodyLimit)}))
 
 	s.routes()
 	return s
@@ -126,12 +136,9 @@ func (s *Server) Handler() *echo.Echo { return s.echo }
 // goes 503 while the listener stays open for HTTP_DRAIN_DELAY) and gracefully
 // shuts down.
 func (s *Server) Start(ctx context.Context) error {
-	s.echo.Server.ReadTimeout = s.cfg.HTTPReadTimeout
-	s.echo.Server.WriteTimeout = s.cfg.HTTPWriteTimeout
-
 	errCh := make(chan error, 1)
 	go func() {
-		if err := s.echo.Start(s.cfg.HTTPAddr()); err != nil && err != http.ErrServerClosed {
+		if err := s.httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			errCh <- err
 		}
 	}()
@@ -163,7 +170,21 @@ func (s *Server) Start(ctx context.Context) error {
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), s.cfg.HTTPShutdownTimeout)
 	defer cancel()
-	return s.echo.Shutdown(shutdownCtx)
+	return s.httpSrv.Shutdown(shutdownCtx)
+}
+
+// defaultHTTPBodyLimitBytes mirrors the HTTP_BODY_LIMIT default (2M).
+const defaultHTTPBodyLimitBytes = 2 << 20
+
+// httpBodyLimitBytes converts HTTP_BODY_LIMIT ("2M") to bytes for echo v5's
+// BodyLimitConfig. Config validation rejects an unparsable value at boot; the
+// fallback only covers a zero Config built in tests.
+func httpBodyLimitBytes(limit string) int64 {
+	n, err := bytes.Parse(limit)
+	if err != nil || n <= 0 {
+		return defaultHTTPBodyLimitBytes
+	}
+	return n
 }
 
 func (s *Server) routes() {
@@ -209,9 +230,8 @@ func (s *Server) requestLogger() echo.MiddlewareFunc {
 		LogMethod:    true,
 		LogLatency:   true,
 		LogRequestID: true,
-		LogError:     true,
 		HandleError:  true,
-		LogValuesFunc: func(c echo.Context, v middleware.RequestLoggerValues) error {
+		LogValuesFunc: func(c *echo.Context, v middleware.RequestLoggerValues) error {
 			level := slog.LevelInfo
 			switch {
 			case v.Status >= 500:
@@ -241,7 +261,7 @@ func (s *Server) requestLogger() echo.MiddlewareFunc {
 	})
 }
 
-func requestLogPath(c echo.Context) string {
+func requestLogPath(c *echo.Context) string {
 	if path := c.Path(); path != "" {
 		return path
 	}
@@ -252,7 +272,7 @@ func requestLogPath(c echo.Context) string {
 // their DB/Redis calls observe a deadline and abort cleanly.
 func requestDeadline(d time.Duration) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
+		return func(c *echo.Context) error {
 			ctx, cancel := context.WithTimeout(c.Request().Context(), d)
 			defer cancel()
 			c.SetRequest(c.Request().WithContext(ctx))
@@ -265,7 +285,7 @@ func requestDeadline(d time.Duration) echo.MiddlewareFunc {
 // this is defense in depth rather than a browser-facing hardening surface.
 func secureHeaders() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
+		return func(c *echo.Context) error {
 			c.Response().Header().Set("X-Content-Type-Options", "nosniff")
 			return next(c)
 		}

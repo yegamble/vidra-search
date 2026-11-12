@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // internalAuthHeader is the HMAC authentication header vidra-core presents on
@@ -39,7 +39,7 @@ func BuildInternalAuthHeader(secret string, ts int64, method, path string) strin
 // with the standard envelope; the reason is never disclosed to the caller.
 func internalAuth(secret string) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
+		return func(c *echo.Context) error {
 			raw := c.Request().Header.Get(internalAuthHeader)
 			if raw == "" {
 				return unauthorized(c)
@@ -68,6 +68,6 @@ func internalAuth(secret string) echo.MiddlewareFunc {
 	}
 }
 
-func unauthorized(c echo.Context) error {
+func unauthorized(c *echo.Context) error {
 	return writeError(c, http.StatusUnauthorized, "unauthorized", "invalid or missing internal authentication")
 }

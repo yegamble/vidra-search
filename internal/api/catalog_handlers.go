@@ -8,14 +8,14 @@ import (
 	"net/http"
 
 	"github.com/google/uuid"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 
 	"github.com/vidra/vidra-search/internal/catalog"
 	"github.com/vidra/vidra-search/internal/event"
 	"github.com/vidra/vidra-search/internal/store"
 )
 
-func readCatalogBody(c echo.Context) ([]byte, error) {
+func readCatalogBody(c *echo.Context) ([]byte, error) {
 	raw, err := io.ReadAll(io.LimitReader(c.Request().Body, catalog.MaxRequestBytes+1))
 	if err != nil {
 		return nil, err
@@ -26,7 +26,7 @@ func readCatalogBody(c echo.Context) ([]byte, error) {
 	return raw, nil
 }
 
-func (s *Server) handleCatalogStatus(c echo.Context) error {
+func (s *Server) handleCatalogStatus(c *echo.Context) error {
 	scopes := c.QueryParams()["scope"]
 	if len(scopes) != 1 || scopes[0] != "local" {
 		return newValidation("scope", "one supported local scope is required")
@@ -46,7 +46,7 @@ type catalogEpochSetter interface {
 	SetCatalogEpoch(context.Context, string, uuid.UUID, *uuid.UUID) error
 }
 
-func (s *Server) handleCatalogEpoch(c echo.Context) error {
+func (s *Server) handleCatalogEpoch(c *echo.Context) error {
 	raw, err := readCatalogBody(c)
 	if err != nil {
 		return err
@@ -86,7 +86,7 @@ func (s *Server) handleCatalogEpoch(c echo.Context) error {
 	return c.NoContent(http.StatusNoContent)
 }
 
-func (s *Server) handleCatalogEvents(c echo.Context) error {
+func (s *Server) handleCatalogEvents(c *echo.Context) error {
 	raw, err := readCatalogBody(c)
 	if err != nil {
 		return err

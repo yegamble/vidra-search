@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 const testSecret = "test-internal-secret-at-least-32-bytes-long"
@@ -24,7 +24,7 @@ func invokeAuth(t *testing.T, header string) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	c.SetPath("/internal/v1/search")
-	h := internalAuth(testSecret)(func(c echo.Context) error {
+	h := internalAuth(testSecret)(func(c *echo.Context) error {
 		return c.NoContent(http.StatusOK)
 	})
 	_ = h(c)
@@ -95,7 +95,7 @@ func TestInternalAuthDecodedPathParam(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	c.SetPath("/internal/v1/users/:user_id/search-history/:normalized_query")
-	h := internalAuth(testSecret)(func(c echo.Context) error { return c.NoContent(http.StatusOK) })
+	h := internalAuth(testSecret)(func(c *echo.Context) error { return c.NoContent(http.StatusOK) })
 	_ = h(c)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("decoded-path-signed header should validate, got %d %s", rec.Code, rec.Body.String())
@@ -107,7 +107,7 @@ func TestInternalAuthDecodedPathParam(t *testing.T) {
 	req2.Header.Set(internalAuthHeader, badHeader)
 	c2 := e.NewContext(req2, rec2)
 	c2.SetPath("/internal/v1/users/:user_id/search-history/:normalized_query")
-	_ = internalAuth(testSecret)(func(c echo.Context) error { return c.NoContent(http.StatusOK) })(c2)
+	_ = internalAuth(testSecret)(func(c *echo.Context) error { return c.NoContent(http.StatusOK) })(c2)
 	if rec2.Code == http.StatusOK {
 		t.Fatalf("a signature over the escaped path must not validate (server verifies decoded path)")
 	}

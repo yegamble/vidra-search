@@ -3,7 +3,7 @@ package api
 import (
 	"strings"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // correlationHeader carries a cross-service correlation id. vidra-core sends it
@@ -21,7 +21,7 @@ const maxCorrelationIDLen = 128
 // the request logger. Must run after middleware.RequestID and before the logger.
 func correlationID() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
+		return func(c *echo.Context) error {
 			cid := sanitizeCorrelationID(c.Request().Header.Get(correlationHeader))
 			if cid == "" {
 				cid = c.Response().Header().Get(echo.HeaderXRequestID)
@@ -38,7 +38,7 @@ func correlationID() echo.MiddlewareFunc {
 const correlationContextKey = "correlation_id"
 
 // correlationFromContext returns the correlation id bound to the Echo context.
-func correlationFromContext(c echo.Context) string {
+func correlationFromContext(c *echo.Context) string {
 	if v, ok := c.Get(correlationContextKey).(string); ok {
 		return v
 	}

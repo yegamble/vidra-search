@@ -4,10 +4,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // errorEnvelope drives one request and decodes the JSON error envelope, which
@@ -28,7 +29,7 @@ func errorEnvelope(t *testing.T, srv *Server, req *http.Request) (int, ErrorResp
 func newErrorServer(t *testing.T, path string, err error) *Server {
 	t.Helper()
 	srv := New(testConfig(), nil, nil, nil, nil, Services{})
-	srv.Handler().GET(path, func(echo.Context) error { return err })
+	srv.Handler().GET(path, func(*echo.Context) error { return err })
 	return srv
 }
 
@@ -162,5 +163,44 @@ func TestUUIDParamValidation(t *testing.T) {
 				t.Errorf("fields = %+v, want one naming %q", body.Error.Fields, tc.field)
 			}
 		})
+	}
+}
+
+// Echo v5 raises its own refusals — no such route, wrong method, body over the
+// limit — as sentinel errors that are NOT *echo.HTTPError. The error handler
+// has to recognise them by status, or every one of them becomes a 500 with the
+// generic message. vidra-core's client reads the status and the code.
+func TestRouterAndBodyLimitRefusalsKeepTheirEnvelope(t *testing.T) {
+	srv := New(testConfig(), nil, nil, nil, nil, Services{})
+	srv.Handler().POST("/test/echo", func(c *echo.Context) error {
+		var in map[string]any
+		if err := c.Bind(&in); err != nil {
+			return err
+		}
+		return c.NoContent(http.StatusNoContent)
+	})
+	big := `{"pad":"` + strings.Repeat("x", 3<<20) + `"}` // HTTP_BODY_LIMIT is 2M here
+	oversized := httptest.NewRequest(http.MethodPost, "/test/echo", strings.NewReader(big))
+	oversized.Header.Set("Content-Type", "application/json")
+	malformed := httptest.NewRequest(http.MethodPost, "/test/echo", strings.NewReader(`{"pad":`))
+	malformed.Header.Set("Content-Type", "application/json")
+
+	for name, tc := range map[string]struct {
+		req  *http.Request
+		code int
+		want string
+	}{
+		"no such route":       {httptest.NewRequest(http.MethodGet, "/no/such/route", nil), http.StatusNotFound, "not_found"},
+		"wrong method":        {httptest.NewRequest(http.MethodDelete, "/healthz", nil), http.StatusMethodNotAllowed, "method_not_allowed"},
+		"body over the limit": {oversized, http.StatusRequestEntityTooLarge, "request_entity_too_large"},
+		"malformed JSON body": {malformed, http.StatusBadRequest, "bad_request"},
+	} {
+		code, body := errorEnvelope(t, srv, tc.req)
+		if code != tc.code || body.Error.Code != tc.want {
+			t.Errorf("%s: %d %q, want %d %q", name, code, body.Error.Code, tc.code, tc.want)
+		}
+		if body.Error.Message == "" {
+			t.Errorf("%s: the envelope carries no message", name)
+		}
 	}
 }

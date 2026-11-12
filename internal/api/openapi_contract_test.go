@@ -77,7 +77,7 @@ func registeredOperations(t *testing.T) map[string]bool {
 		"DELETE": true, "HEAD": true, "OPTIONS": true,
 	}
 	ops := map[string]bool{}
-	for _, r := range srv.Handler().Routes() {
+	for _, r := range srv.Handler().Router().Routes() {
 		if !httpMethods[r.Method] || strings.Contains(r.Path, "*") {
 			continue
 		}
